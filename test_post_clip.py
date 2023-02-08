@@ -346,8 +346,10 @@ def main():
         logging.info("Test Dataset size: {}".format(total_shapes_test))
         logging.info("#############################")
 
-    device, gpu_array = helper.get_device(args)
-    args.device = device     
+    # device, gpu_array = helper.get_device(args)
+    # TODO: Set this correctly. We should be able to set this to MPS but when we do so, generated results become NaN.
+    args.device = "cpu"
+    device = "cpu"
 
     ### Network stuff 
     logging.info("#############################")
