@@ -1,36 +1,20 @@
+import logging
 import os
 import os.path as osp
-import logging
-
-from tqdm import tqdm
-from sklearn.metrics import accuracy_score, confusion_matrix
-import numpy as np
-
-from PIL import Image
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-from mpl_toolkits.mplot3d import Axes3D
-
-import torch
-from torch.utils.data import Dataset, DataLoader
-
-
-from utils import helper
-from utils import visualization
-from utils import experimenter
-
-from train_autoencoder import experiment_name, parsing
-from train_post_clip import (
-    get_dataloader,
-    experiment_name2,
-    get_condition_embeddings,
-    get_local_parser,
-    get_clip_model,
-)
-from dataset import shapenet_dataset
-from networks import autoencoder, latent_flows
 
 import clip
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.metrics import accuracy_score, confusion_matrix
+from tqdm import tqdm
+
+import classifier
+from fid_cal import calculate_activation_statistics, calculate_frechet_distance
+from networks import autoencoder, latent_flows
+from train_post_clip import get_clip_model, get_dataloader, get_local_parser
+from utils import helper, visualization
 
 ###################################### Text Queries ###############################################
 
@@ -266,8 +250,7 @@ def generate_all_queries_2(prefix="a"):
     all_queries = []
     all_labels = []
 
-    for category_id in id_to_sub_category:
-        sub_category_queries = id_to_sub_category[category_id]
+    for category_id, sub_category_queries in id_to_sub_category.items():
         main_category = sub_category_queries[0]
 
         new_prefix = prefix
@@ -430,7 +413,6 @@ def save_voxel_images(
     net.eval()
     latent_flow_model.eval()
     clip_model.eval()
-    count = 1
     num_figs = num_figs_per_query
     with torch.no_grad():
         voxel_size = resolution
@@ -624,8 +606,7 @@ def main():
             )
         )
 
-        import classifier
-        from fid_cal import calculate_activation_statistics, calculate_frechet_distance
+
 
         cls = classifier.classifier_32("Voxel_Encoder_BN", 13).to(args.device)
         cls_checkpoint = torch.load(
@@ -657,10 +638,6 @@ def main():
             )
         )
 
-        import classifier
-        from fid_cal import calculate_activation_statistics, calculate_frechet_distance
-        from sklearn.metrics import accuracy_score
-
         cls = classifier.classifier_32("Voxel_Encoder_BN", 13).to(args.device)
         cls_checkpoint = torch.load(
             args.classifier_checkpoint, map_location=args.device
@@ -690,9 +667,7 @@ def main():
             )
         )
 
-        import classifier
-        from fid_cal import calculate_activation_statistics, calculate_frechet_distance
-        from sklearn.metrics import accuracy_score
+
 
         cls = classifier.classifier_32("Voxel_Encoder_BN", 13).to(args.device)
         cls_checkpoint = torch.load(
