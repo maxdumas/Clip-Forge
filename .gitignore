@@ -1,4 +1,11 @@
+__MACOSX
+.DS_Store
+
+exps.zip
 exps/*
+
+dataset/ShapeNet/
+
 .ipynb_checkpoints/
 nohup.out
 *pyc
