@@ -1,11 +1,13 @@
 import logging
-import torch
 import os
 import os.path as osp
-import sys
-from torch import optim
-import numpy as np
 import random
+import sys
+
+import numpy as np
+import torch
+from torch import optim
+
 
 def setup_logging(filename: str, level_str: str, filemode: str):
     """
@@ -15,16 +17,18 @@ def setup_logging(filename: str, level_str: str, filemode: str):
     :param filemode:
     :return:
     """
-    if level_str == 'error':
+    if level_str == "error":
         level = logging.ERROR
-    elif level_str == 'warning':
+    elif level_str == "warning":
         level = logging.WARNING
-    elif level_str == 'info':
+    elif level_str == "info":
         level = logging.INFO
     else:
-        raise ValueError('Unknown logging level {}. Expected one of ("error", "warning", "info")')
+        raise ValueError(
+            'Unknown logging level {}. Expected one of ("error", "warning", "info")'
+        )
 
-    log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    log_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
@@ -36,6 +40,7 @@ def setup_logging(filename: str, level_str: str, filemode: str):
     console_handler.setFormatter(log_formatter)
     root_logger.addHandler(console_handler)
 
+
 def load_checkpoint(filename: str):
     """
     Load model, optimizer and scheduler state from a file
@@ -46,12 +51,18 @@ def load_checkpoint(filename: str):
 
 
 def save_checkpoint(filename, model, args, optimizer, scheduler, current_epoch):
-
     torch.save(
-        {'model': model.state_dict(), 'args': args,
-            'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict(), "current_epoch": current_epoch},
-        '{}'.format(filename))
-    
+        {
+            "model": model.state_dict(),
+            "args": args,
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "current_epoch": current_epoch,
+        },
+        str(filename),
+    )
+
+
 def get_optimizer_model(name: str, model, lr, **kwargs):
     """
     Create and initialize a PyTorch optimizer
@@ -61,7 +72,7 @@ def get_optimizer_model(name: str, model, lr, **kwargs):
     :param kwargs: other keyword arguments to the optimizer
     :return: Optimizer
     """
-    params = list(model.parameters()) 
+    params = list(model.parameters())
     if name == "SGD":
         if lr is None:
             lr = 0.1
@@ -69,10 +80,10 @@ def get_optimizer_model(name: str, model, lr, **kwargs):
     if name == "Adam":
         if lr is None:
             lr = 0.0001
-        return optim.Adam(params, lr=lr,  weight_decay=1e-5)
+        return optim.Adam(params, lr=lr, weight_decay=1e-5)
     raise ValueError("Unknown optimizer: " + name)
-    
-    
+
+
 def create_dir(path: str):
     """
     Create a directory of it does not exist
@@ -82,9 +93,9 @@ def create_dir(path: str):
     if not osp.exists(path):
         os.makedirs(path)
 
+
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
-  
 
 
 def get_device(args):
@@ -100,19 +111,20 @@ def get_device(args):
         length = length + 1
     return gpu_string, gpu_array
 
+
 def set_seed(manualSeed):
     np.random.seed(manualSeed)
     random.seed(manualSeed)
     torch.manual_seed(manualSeed)
-    # if you are suing GPU
+    # if you are using GPU
     torch.cuda.manual_seed(manualSeed)
     torch.cuda.manual_seed_all(manualSeed)
-    torch.backends.cudnn.enabled = False 
+    torch.backends.cudnn.enabled = False
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
+
 class AverageMeter(object):
-    
     def __init__(self):
         self.reset()
 
