@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import os.path as osp
 from typing import Any
 
@@ -8,6 +9,7 @@ import torch
 from PIL import Image
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
+from pytorch_lightning.tuner.tuning import Tuner
 from torch.utils.data import DataLoader
 
 from dataset import shapenet_dataset
@@ -94,6 +96,7 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
+            num_workers=os.cpu_count() or 0,
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -113,6 +116,7 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
             batch_size=self.test_batch_size,
             shuffle=False,
             drop_last=False,
+            num_workers=os.cpu_count() or 0,
         )
 
     def test_dataloader(self) -> DataLoader:
@@ -132,6 +136,7 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
             batch_size=self.test_batch_size,
             shuffle=False,
             drop_last=False,
+            num_workers=os.cpu_count() or 0,
         )
 
 
@@ -366,8 +371,10 @@ def main():
 
     if args.train_mode == "test":
         trainer.test(net, datamodule=datamodule)
-
     else:  # train mode
+        tuner = Tuner(trainer)
+        tuner.lr_find(net, datamodule=datamodule)
+        tuner.scale_batch_size(net, datamodule=datamodule, mode="binsearch")
         trainer.fit(net, datamodule=datamodule)
 
 

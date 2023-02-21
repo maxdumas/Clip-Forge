@@ -254,12 +254,15 @@ def compute_iou(occ1, occ2):
 class Autoencoder(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
+        self.save_hyperparameters()
 
         ### Local Model Hyperparameters
         self.args = args
+        self.learning_rate = self.args.lr
+        self.batch_size = self.args.batch_size
+        self.emb_dims = args.emb_dims
         self.encoder_type = args.encoder_type
         self.decoder_type = args.decoder_type
-        self.emb_dims = args.emb_dims
         self.input_type = args.input_type
         self.output_type = args.output_type
 
@@ -307,7 +310,7 @@ class Autoencoder(pl.LightningModule):
         return pred, shape_embs
 
     def configure_optimizers(self):
-        optimizer = get_optimizer_model(self.args.optimizer, self, lr=self.args.lr)
+        optimizer = get_optimizer_model(self.args.optimizer, self, lr=self.learning_rate)
         return optimizer
 
     def training_step(self, data, batch_idx):
