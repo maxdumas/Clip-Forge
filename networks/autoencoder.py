@@ -2,8 +2,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pytorch_lightning as pl
 
 from .network_utils import ResnetBlockFC
+from utils.helper import get_optimizer_model
+from utils.visualization import make_3d_grid
 
 EPS = 1e-6
 
@@ -218,8 +221,37 @@ class Occ_Simple_Decoder(nn.Module):
 ####################################################################################################
 ####################################################################################################
 
+def compute_iou(occ1, occ2):
+    """Computes the Intersection over Union (IoU) value for two sets of
+    occupancy values.
+    Args:
+        occ1 (tensor): first set of occupancy values
+        occ2 (tensor): second set of occupancy values
+    """
+    occ1 = np.asarray(occ1)
+    occ2 = np.asarray(occ2)
 
-class Autoencoder(nn.Module):
+    # Put all data in second dimension
+    # Also works for 1-dimensional data
+    if occ1.ndim >= 2:
+        occ1 = occ1.reshape(occ1.shape[0], -1)
+    if occ2.ndim >= 2:
+        occ2 = occ2.reshape(occ2.shape[0], -1)
+
+    # Convert to boolean values
+    occ1 = occ1 >= 0.5
+    occ2 = occ2 >= 0.5
+
+    # Compute IOU
+    area_union = (occ1 | occ2).astype(np.float32).sum(axis=-1)
+    area_intersect = (occ1 & occ2).astype(np.float32).sum(axis=-1)
+
+    iou = area_intersect / area_union
+
+    return iou
+
+
+class Autoencoder(pl.LightningModule):
     def __init__(self, args):
         super().__init__()
 
@@ -253,19 +285,94 @@ class Autoencoder(nn.Module):
             raise ValueError("The output representation is not implemented")
 
     def decoding(self, shape_embedding, points=None):
-        if self.output_type == "Pointcloud":
+        if self.output_type == "Implicit":
+            return self.decoder(points, shape_embedding)
+        elif self.output_type == "Pointcloud":
             return self.decoder(shape_embedding)
         else:
-            return self.decoder(points, shape_embedding)
+            raise ValueError("The output representation is not implemented")
 
     def reconstruction_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-        if self.output_type == "Pointcloud":
+        if self.output_type == "Implicit":
+            return torch.mean((pred.squeeze(-1) - gt) ** 2)
+        elif self.output_type == "Pointcloud":
             dl, dr = dist_chamfer(gt, pred)
             return (dl.mean(dim=1) + dr.mean(dim=1)).mean()
         else:
-            return torch.mean((pred.squeeze(-1) - gt) ** 2)
+            raise ValueError("The output representation is not implemented")
 
     def forward(self, data_input, query_points=None):
         shape_embs = self.encoder(data_input)
         pred = self.decoding(shape_embs, points=query_points)
         return pred, shape_embs
+
+    def configure_optimizers(self):
+        optimizer = get_optimizer_model(self.args.optimizer, self, lr=self.args.lr)
+        return optimizer
+
+    def training_step(self, data, batch_idx):
+        # Load appropriate input data from the training set
+        if self.args.input_type == "Voxel":
+            data_input = data["voxels"].type(torch.FloatTensor)
+        elif self.args.input_type == "Pointcloud":
+            data_input = data["pc_org"].type(torch.FloatTensor).transpose(-1, 1)
+
+        # Load appropriate output data from the training set
+        if self.args.output_type == "Implicit":
+            query_points = data["points"].type(torch.FloatTensor)
+            occ = data["points.occ"].type(torch.FloatTensor)
+            gt = occ
+        elif self.args.output_type == "Pointcloud":
+            query_points = None
+            gt = data["pc_org"].type(torch.FloatTensor)
+
+        # Run prediction
+        pred, shape_embs = self.forward(data_input, query_points)
+
+        # Compute reconstruction loss
+        loss = self.reconstruction_loss(pred, gt)
+
+        self.log("Loss/train", loss)
+
+        return loss
+
+    def validation_step(self, data, data_idx):
+        if self.args.input_type == "Voxel":
+            data_input = data["voxels"].type(torch.FloatTensor)
+        elif self.args.input_type == "Pointcloud":
+            data_input = data["pc_org"].type(torch.FloatTensor).transpose(-1, 1)
+
+        if self.args.output_type == "Implicit":
+            # query_points, occ = data["points"], data["points.occ"]
+            # query_points = query_points.type(torch.FloatTensor)
+            # occ = occ.type(torch.FloatTensor)
+            # gt = occ
+
+            # Compute IOU loss for Implicit representation
+            points_voxels = (
+                    make_3d_grid((-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3)
+                    .type(torch.FloatTensor)
+                )
+            query_points = points_voxels.expand(self.args.test_batch_size, *points_voxels.size())
+            
+
+            voxels_occ_np = (data["voxels"] >= 0.5).cpu().numpy()
+
+            if self.args.test_batch_size != data_input.size(0):
+                query_points = points_voxels.expand(
+                    data_input.size(0), *points_voxels.size()
+                )
+
+            pred, _ = self.forward(data_input, query_points)
+
+            occ_hat_np = pred >= self.args.threshold
+            iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
+            loss = iou_voxels.item()
+        elif self.args.output_type == "Pointcloud":
+            query_points = None
+            gt = data["pc_org"].type(torch.FloatTensor)
+
+            pred, _ = self.forward(data_input, query_points)
+            loss = self.reconstruction_loss(pred, gt)
+
+        self.log("Loss/val", loss)
