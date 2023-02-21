@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataset import shapenet_dataset
-from networks import autoencoder, latent_flows
+from networks import latent_flows
+from networks.autoencoder import Autoencoder
 from train_autoencoder import experiment_name, parsing
 from utils import helper, visualization
 
@@ -419,7 +420,7 @@ def main():
     logging.info("Test Dataset size: {}".format(total_shapes_val))
     logging.info("#############################")
 
-    net = autoencoder.get_model(args).to(args.device)
+    net = Autoencoder(args).to(args.device)
     checkpoint = torch.load(
         args.checkpoint_dir_base + "/" + args.checkpoint + ".pt",
         map_location=args.device,

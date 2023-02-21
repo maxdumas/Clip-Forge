@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from dataset import shapenet_dataset
-from networks import autoencoder
+from networks.autoencoder import Autoencoder
 from utils import helper, visualization
 
 ###################################### Experiment Utils########################################################
@@ -34,18 +34,6 @@ def experiment_name(args):
 
     tokens.append(args.seed)
     return "_".join(map(str, tokens))
-
-
-def bool_flag(s):
-    """
-    Parse boolean arguments from the command line.
-    """
-    if s.lower() in FALSY_STRINGS:
-        return False
-    elif s.lower() in TRUTHY_STRINGS:
-        return True
-    else:
-        raise argparse.ArgumentTypeError("invalid value for a boolean flag")
 
 
 def compute_iou(occ1, occ2):
@@ -84,62 +72,57 @@ def compute_iou(occ1, occ2):
 
 
 def get_dataloader(args, split="train"):
-    if args.dataset_name == "Shapenet":
-        pointcloud_field = shapenet_dataset.PointCloudField("pointcloud.npz")
-        points_field = shapenet_dataset.PointsField("points.npz", unpackbits=True)
-        voxel_fields = shapenet_dataset.VoxelsField("model.binvox")
-
-        fields = {}
-
-        fields["pointcloud"] = pointcloud_field
-        fields["points"] = points_field
-        fields["voxels"] = voxel_fields
-
-        if split == "train":
-            dataset = shapenet_dataset.Shapes3dDataset(
-                args.dataset_path,
-                fields,
-                split=split,
-                categories=args.categories,
-                no_except=True,
-                transform=None,
-                num_points=args.num_points,
-                num_sdf_points=args.num_sdf_points,
-                sampling_type=args.sampling_type,
-            )
-
-            dataloader = DataLoader(
-                dataset,
-                batch_size=args.batch_size,
-                shuffle=True,
-                num_workers=args.num_workers,
-                drop_last=True,
-            )
-            total_shapes = len(dataset)
-        else:
-            dataset = shapenet_dataset.Shapes3dDataset(
-                args.dataset_path,
-                fields,
-                split=split,
-                categories=args.categories,
-                no_except=True,
-                transform=None,
-                num_points=args.num_points,
-                num_sdf_points=args.test_num_sdf_points,
-                sampling_type=args.sampling_type,
-            )
-            dataloader = DataLoader(
-                dataset,
-                batch_size=args.test_batch_size,
-                shuffle=True,
-                num_workers=args.num_workers,
-                drop_last=False,
-            )
-            total_shapes = len(dataset)
-        return dataloader, total_shapes
-
-    else:
+    if args.dataset_name != "Shapenet":
         raise ValueError(f"Dataset name is not defined {args.dataset_name}")
+
+    fields = {
+        "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
+        "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
+        "voxels": shapenet_dataset.VoxelsField("model.binvox"),
+    }
+
+    if split == "train":
+        dataset = shapenet_dataset.Shapes3dDataset(
+            args.dataset_path,
+            fields,
+            split=split,
+            categories=args.categories,
+            no_except=True,
+            transform=None,
+            num_points=args.num_points,
+            num_sdf_points=args.num_sdf_points,
+            sampling_type=args.sampling_type,
+        )
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            drop_last=True,
+        )
+        total_shapes = len(dataset)
+    else:
+        dataset = shapenet_dataset.Shapes3dDataset(
+            args.dataset_path,
+            fields,
+            split=split,
+            categories=args.categories,
+            no_except=True,
+            transform=None,
+            num_points=args.num_points,
+            num_sdf_points=args.test_num_sdf_points,
+            sampling_type=args.sampling_type,
+        )
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.test_batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            drop_last=False,
+        )
+        total_shapes = len(dataset)
+    return dataloader, total_shapes
 
 
 ############################################# data loader #################################################
@@ -283,7 +266,7 @@ def val_one_epoch(model, args, test_dataloader, epoch):
 
 
 def train_one_epoch(
-    model: autoencoder.get_model,
+    model: Autoencoder,
     args,
     train_dataloader: DataLoader,
     optimizer: SGD | Adam,
@@ -534,7 +517,7 @@ def main():
     logging.info("Test Dataset size: %s", total_shapes_test)
 
     # Loading networks
-    net = autoencoder.get_model(args).to(args.device)
+    net = Autoencoder(args).to(args.device)
     print(net)
 
     if args.train_mode == "test":

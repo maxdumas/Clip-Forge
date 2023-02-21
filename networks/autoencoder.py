@@ -219,7 +219,7 @@ class Occ_Simple_Decoder(nn.Module):
 ####################################################################################################
 
 
-class get_model(nn.Module):
+class Autoencoder(nn.Module):
     def __init__(self, args):
         super().__init__()
 
