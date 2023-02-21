@@ -6,6 +6,7 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
+from pytorch_lightning.loggers.wandb import WandbLogger
 
 from dataset import shapenet_dataset
 from networks.autoencoder import Autoencoder
@@ -309,6 +310,9 @@ def main():
     logging.info("Experiment name: %s", exp_name)
     logging.info("%s", args)
 
+    wandb = WandbLogger("clip_forge")
+    wandb.experiment.config.update(args)
+
     # Loading networks
     if args.checkpoint is not None:
         checkpoint = torch.load(args.checkpoint_dir + "/" + args.checkpoint + ".pt")
@@ -321,7 +325,7 @@ def main():
         full_test_dataloader, total_shapes_test = get_dataloader(args, split="test")
         logging.info("Test Dataset size: %s", total_shapes_test)
 
-        trainer = pl.Trainer(accelerator="mps", devices=1)
+        trainer = pl.Trainer(accelerator="mps", devices=1, logger=wandb)
         trainer.test(net, full_test_dataloader)
 
     else:  # train mode
@@ -332,7 +336,7 @@ def main():
         val_dataloader, total_shapes_val = get_dataloader(args, split="val")
         logging.info("Val Dataset size: %s", total_shapes_val)
 
-        trainer = pl.Trainer(accelerator="mps", devices=1)
+        trainer = pl.Trainer(accelerator="mps", devices=1, logger=wandb)
         trainer.fit(net, train_dataloader, val_dataloader)
 
 
