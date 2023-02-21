@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os.path as osp
+from typing import Any
 
 import numpy as np
 import torch
@@ -11,9 +12,6 @@ from torch.utils.tensorboard import SummaryWriter
 from dataset import shapenet_dataset
 from networks.autoencoder import Autoencoder
 from utils import helper, visualization
-
-###################################### Experiment Utils########################################################
-
 
 def experiment_name(args):
     tokens = [
@@ -64,11 +62,6 @@ def compute_iou(occ1, occ2):
     iou = area_intersect / area_union
 
     return iou
-
-
-###################################### Experiment Utils########################################################
-
-############################################# data loader #################################################
 
 
 def get_dataloader(args, split="train"):
@@ -125,12 +118,6 @@ def get_dataloader(args, split="train"):
     return dataloader, total_shapes
 
 
-############################################# data loader #################################################
-
-
-############################## visualization #################################################
-
-
 def visualization_model(model, args, test_dataloader, name_info):
     model.eval()
     test_loader = iter(test_dataloader)
@@ -184,11 +171,6 @@ def visualization_model(model, args, test_dataloader, name_info):
             )
 
 
-############################## visualization #################################################
-
-############################## validation #################################################
-
-
 def val_one_epoch_iou(model, args, test_dataloader, epoch):
     model.eval()
     loss_reconstruction = []
@@ -224,9 +206,9 @@ def val_one_epoch_iou(model, args, test_dataloader, epoch):
     return loss_reconstruction
 
 
-def val_one_epoch(model, args, test_dataloader, epoch):
+def val_one_epoch(model, args, test_dataloader, epoch, writer):
+    loss_array = []
     model.eval()
-    loss_reconstruction = []
 
     with torch.no_grad():
         for data in test_dataloader:
@@ -250,19 +232,15 @@ def val_one_epoch(model, args, test_dataloader, epoch):
                 gt = data["pc_org"].type(torch.FloatTensor).to(args.device)
 
             pred, _ = model(data_input, query_points)
-            loss_reconstuct = model.reconstruction_loss(pred, gt)
+            loss = model.reconstruction_loss(pred, gt)
 
-            loss_reconstruction.append(loss_reconstuct.item())
+            loss_array.append(loss.item())
 
-    loss_reconstruction = np.asarray(loss_reconstruction)
-    loss_reconstruction = np.mean(loss_reconstruction)
-    logging.info("[Val]  Epoch %s Loss: %s", epoch, loss_reconstruction)
-    return loss_reconstruction
+    mean_loss = np.mean(np.asarray(loss_array))
+    writer.add_scalar("Loss/val", mean_loss, epoch * args.num_iterations)
+    logging.info("[Val]  Epoch %s Loss: %s", epoch, mean_loss)
 
-
-############################## validation #################################################
-
-############################## training #################################################
+    return mean_loss
 
 
 def train_one_epoch(
@@ -270,12 +248,13 @@ def train_one_epoch(
     args,
     train_dataloader: DataLoader,
     optimizer: SGD | Adam,
-    loss_meter: helper.AverageMeter,
     epoch: int,
+    loss_meter: helper.AverageMeter,
     writer: SummaryWriter
 ):
     model.train()
     iteration = 0
+
     with torch.profiler.profile(
         schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
         on_trace_ready=torch.profiler.tensorboard_trace_handler(osp.join(args.experiment_dir, "tb_logs")),
@@ -320,6 +299,7 @@ def train_one_epoch(
             optimizer.step()
             loss_meter.update(loss, data_input.size(0))
 
+            # Track metrics
             writer.add_scalar("Loss/train", loss, epoch * args.num_iterations + iteration)
             prof.step()
 
@@ -336,7 +316,7 @@ def train_one_epoch(
 ############################## training #################################################
 
 
-def parsing(mode="args"):
+def parsing(mode="args") -> Any:
     parser = argparse.ArgumentParser()
 
     ### Sub Network details
@@ -558,10 +538,9 @@ def main():
 
         for epoch in range(start_epoch, args.epochs):
             loss_meter = helper.AverageMeter()
-            logging.info("#############################")
 
             train_one_epoch(
-                net, args, train_dataloader, optimizer, loss_meter, epoch, writer
+                net, args, train_dataloader, optimizer, epoch, loss_meter, writer
             )
 
             if (epoch + 1) % 5 == 0:
@@ -582,7 +561,7 @@ def main():
                         epoch,
                     )
             elif args.output_type == "Pointcloud":
-                val_loss = val_one_epoch(net, args, test_dataloader, epoch)
+                val_loss = val_one_epoch(net, args, test_dataloader, epoch, writer)
                 if best_loss > val_loss:
                     best_loss = val_loss
                     filename = "best.pt"
