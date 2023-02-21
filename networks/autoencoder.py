@@ -30,7 +30,7 @@ def dist_chamfer(a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.
 
 class PointNet_Head(nn.Module):
     def __init__(self, pc_dims=1024):
-        super(PointNet_Head, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv1d(3, 64, kernel_size=1, bias=False)
         self.conv2 = nn.Conv1d(64, 64, kernel_size=1, bias=False)
         self.conv3 = nn.Conv1d(64, 64, kernel_size=1, bias=False)
@@ -87,7 +87,7 @@ def GridSamplingLayer(batch_size, meshgrid):
 
 class Foldingnet_decoder(nn.Module):
     def __init__(self, num_points, z_dim):
-        super(Foldingnet_decoder, self).__init__()
+        super().__init__()
         self.num_points = num_points
         self.conv1 = torch.nn.Conv1d(z_dim + 2, 512, 1)
         self.conv2 = torch.nn.Conv1d(512, 512, 1)
@@ -343,11 +343,6 @@ class Autoencoder(pl.LightningModule):
             data_input = data["pc_org"].type(torch.FloatTensor).transpose(-1, 1)
 
         if self.args.output_type == "Implicit":
-            # query_points, occ = data["points"], data["points.occ"]
-            # query_points = query_points.type(torch.FloatTensor)
-            # occ = occ.type(torch.FloatTensor)
-            # gt = occ
-
             # Compute IOU loss for Implicit representation
             points_voxels = (
                     make_3d_grid((-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3)

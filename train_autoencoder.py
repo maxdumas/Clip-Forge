@@ -325,7 +325,7 @@ def main():
         full_test_dataloader, total_shapes_test = get_dataloader(args, split="test")
         logging.info("Test Dataset size: %s", total_shapes_test)
 
-        trainer = pl.Trainer(accelerator="mps", devices=1, logger=wandb)
+        trainer = pl.Trainer(logger=wandb)
         trainer.test(net, full_test_dataloader)
 
     else:  # train mode
@@ -336,7 +336,7 @@ def main():
         val_dataloader, total_shapes_val = get_dataloader(args, split="val")
         logging.info("Val Dataset size: %s", total_shapes_val)
 
-        trainer = pl.Trainer(accelerator="mps", devices=1, logger=wandb)
+        trainer = pl.Trainer(logger=wandb)
         trainer.fit(net, train_dataloader, val_dataloader)
 
 
