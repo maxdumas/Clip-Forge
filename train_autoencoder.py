@@ -6,11 +6,13 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
 
 from dataset import shapenet_dataset
 from networks.autoencoder import Autoencoder
 from utils import helper, visualization
+
 
 def experiment_name(args):
     tokens = [
@@ -33,60 +35,100 @@ def experiment_name(args):
     return "_".join(map(str, tokens))
 
 
+class AutoencoderShapeNetDataModule(pl.LightningDataModule):
+    def __init__(
+        self,
+        dataset_name: str,
+        dataset_path: str,
+        categories: list[str] | None,
+        batch_size: int = 32,
+        test_batch_size: int = 32,
+        num_points: int = 2025,
+        num_sdf_points: int = 5000,
+        test_num_sdf_points: int = 5000,
+        sampling_type: str | None = None,
+    ):
+        super().__init__()
 
+        assert (
+            dataset_name == "Shapenet"
+        ), "Only the ShapeNet dataset is currently supported."
 
-def get_dataloader(args, split="train"):
-    if args.dataset_name != "Shapenet":
-        raise ValueError(f"Dataset name is not defined {args.dataset_name}")
+        self.dataset_path = dataset_path
+        self.batch_size = batch_size
+        self.test_batch_size = test_batch_size
+        self.categories = categories
+        self.num_points = num_points
+        self.num_sdf_points = num_sdf_points
+        self.test_num_sdf_points = test_num_sdf_points
+        self.sampling_type = sampling_type
 
-    fields = {
-        "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
-        "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
-        "voxels": shapenet_dataset.VoxelsField("model.binvox"),
-    }
+        self.fields = {
+            "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
+            "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
+            "voxels": shapenet_dataset.VoxelsField("model.binvox"),
+        }
 
-    if split == "train":
+    def setup(self, stage: str) -> None:
+        pass
+
+    def train_dataloader(self) -> DataLoader:
         dataset = shapenet_dataset.Shapes3dDataset(
-            args.dataset_path,
-            fields,
-            split=split,
-            categories=args.categories,
+            self.dataset_path,
+            self.fields,
+            split="train",
+            categories=self.categories,
             no_except=True,
             transform=None,
-            num_points=args.num_points,
-            num_sdf_points=args.num_sdf_points,
-            sampling_type=args.sampling_type,
+            num_points=self.num_points,
+            num_sdf_points=self.num_sdf_points,
+            sampling_type=self.sampling_type,
         )
 
-        dataloader = DataLoader(
+        return DataLoader(
             dataset,
-            batch_size=args.batch_size,
+            batch_size=self.batch_size,
             shuffle=True,
-            num_workers=args.num_workers,
             drop_last=True,
         )
-        total_shapes = len(dataset)
-    else:
+
+    def val_dataloader(self) -> DataLoader:
         dataset = shapenet_dataset.Shapes3dDataset(
-            args.dataset_path,
-            fields,
-            split=split,
-            categories=args.categories,
+            self.dataset_path,
+            self.fields,
+            split="val",
+            categories=self.categories,
             no_except=True,
             transform=None,
-            num_points=args.num_points,
-            num_sdf_points=args.test_num_sdf_points,
-            sampling_type=args.sampling_type,
+            num_points=self.num_points,
+            num_sdf_points=self.test_num_sdf_points,
+            sampling_type=self.sampling_type,
         )
-        dataloader = DataLoader(
+        return DataLoader(
             dataset,
-            batch_size=args.test_batch_size,
-            shuffle=True,
-            num_workers=args.num_workers,
+            batch_size=self.test_batch_size,
+            shuffle=False,
             drop_last=False,
         )
-        total_shapes = len(dataset)
-    return dataloader, total_shapes
+
+    def test_dataloader(self) -> DataLoader:
+        dataset = shapenet_dataset.Shapes3dDataset(
+            self.dataset_path,
+            self.fields,
+            split="test",
+            categories=self.categories,
+            no_except=True,
+            transform=None,
+            num_points=self.num_points,
+            num_sdf_points=self.test_num_sdf_points,
+            sampling_type=self.sampling_type,
+        )
+        return DataLoader(
+            dataset,
+            batch_size=self.test_batch_size,
+            shuffle=False,
+            drop_last=False,
+        )
 
 
 def visualization_model(model, args, test_dataloader, name_info):
@@ -310,7 +352,7 @@ def main():
     logging.info("Experiment name: %s", exp_name)
     logging.info("%s", args)
 
-    wandb = WandbLogger("clip_forge")
+    wandb = WandbLogger(name="clip_forge/autoencoder", log_model=True)
     wandb.experiment.config.update(args)
 
     # Loading networks
@@ -320,24 +362,26 @@ def main():
     else:
         net = Autoencoder(args)
 
-    if args.train_mode == "test":
-        # Loading datasets
-        full_test_dataloader, total_shapes_test = get_dataloader(args, split="test")
-        logging.info("Test Dataset size: %s", total_shapes_test)
+    datamodule = AutoencoderShapeNetDataModule(
+        args.dataset_name,
+        args.dataset_path,
+        args.categories,
+        args.batch_size,
+        args.test_batch_size,
+        args.num_points,
+        args.num_sdf_points,
+        args.test_num_sdf_points,
+        args.sampling_type,
+    )
 
-        trainer = pl.Trainer(logger=wandb)
-        trainer.test(net, full_test_dataloader)
+    checkpoint_callback = ModelCheckpoint(save_top_k=2, monitor="Loss/val")
+    trainer = pl.Trainer(logger=wandb, callbacks=[checkpoint_callback])
+
+    if args.train_mode == "test":
+        trainer.test(net, datamodule=datamodule)
 
     else:  # train mode
-        # Loading datasets
-        train_dataloader, total_shapes = get_dataloader(args, split="train")
-        args.total_shapes = total_shapes
-        logging.info("Train Dataset size: %s", total_shapes)
-        val_dataloader, total_shapes_val = get_dataloader(args, split="val")
-        logging.info("Val Dataset size: %s", total_shapes_val)
-
-        trainer = pl.Trainer(logger=wandb)
-        trainer.fit(net, train_dataloader, val_dataloader)
+        trainer.fit(net, datamodule=datamodule)
 
 
 if __name__ == "__main__":

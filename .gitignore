@@ -3,6 +3,7 @@ __MACOSX
 
 exps.zip
 exps/*
+wandb/
 
 dataset/ShapeNet/
 
