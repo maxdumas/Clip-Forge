@@ -1,4 +1,5 @@
 import argparse
+import io
 import logging
 import os
 import os.path as osp
@@ -9,15 +10,13 @@ import torch
 from PIL import Image
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
-from pytorch_lightning.tuner.tuning import Tuner
 from torch.utils.data import DataLoader
 
+import wandb
 from dataset import shapenet_dataset
 from networks.autoencoder import Autoencoder
 from utils import helper
 from utils.visualization import multiple_plot_voxel, plot_real_pred
-
-wandb_logger = WandbLogger(name="clip_forge/autoencoder", log_model=True)
 
 
 def experiment_name(args):
@@ -76,23 +75,45 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
         }
 
     def setup(self, stage: str) -> None:
-        pass
+        if stage == "fit":
+            self.train_dataset = shapenet_dataset.Shapes3dDataset(
+                self.dataset_path,
+                self.fields,
+                split="train",
+                categories=self.categories,
+                no_except=True,
+                transform=None,
+                num_points=self.num_points,
+                num_sdf_points=self.num_sdf_points,
+                sampling_type=self.sampling_type,
+            )
+            self.val_dataset = shapenet_dataset.Shapes3dDataset(
+                self.dataset_path,
+                self.fields,
+                split="val",
+                categories=self.categories,
+                no_except=True,
+                transform=None,
+                num_points=self.num_points,
+                num_sdf_points=self.test_num_sdf_points,
+                sampling_type=self.sampling_type,
+            )
+        elif stage == "test":
+            self.test_dataset = shapenet_dataset.Shapes3dDataset(
+                self.dataset_path,
+                self.fields,
+                split="test",
+                categories=self.categories,
+                no_except=True,
+                transform=None,
+                num_points=self.num_points,
+                num_sdf_points=self.test_num_sdf_points,
+                sampling_type=self.sampling_type,
+            )
 
     def train_dataloader(self) -> DataLoader:
-        dataset = shapenet_dataset.Shapes3dDataset(
-            self.dataset_path,
-            self.fields,
-            split="train",
-            categories=self.categories,
-            no_except=True,
-            transform=None,
-            num_points=self.num_points,
-            num_sdf_points=self.num_sdf_points,
-            sampling_type=self.sampling_type,
-        )
-
         return DataLoader(
-            dataset,
+            self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
@@ -100,19 +121,8 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self) -> DataLoader:
-        dataset = shapenet_dataset.Shapes3dDataset(
-            self.dataset_path,
-            self.fields,
-            split="val",
-            categories=self.categories,
-            no_except=True,
-            transform=None,
-            num_points=self.num_points,
-            num_sdf_points=self.test_num_sdf_points,
-            sampling_type=self.sampling_type,
-        )
         return DataLoader(
-            dataset,
+            self.val_dataset,
             batch_size=self.test_batch_size,
             shuffle=False,
             drop_last=False,
@@ -120,19 +130,8 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
         )
 
     def test_dataloader(self) -> DataLoader:
-        dataset = shapenet_dataset.Shapes3dDataset(
-            self.dataset_path,
-            self.fields,
-            split="test",
-            categories=self.categories,
-            no_except=True,
-            transform=None,
-            num_points=self.num_points,
-            num_sdf_points=self.test_num_sdf_points,
-            sampling_type=self.sampling_type,
-        )
         return DataLoader(
-            dataset,
+            self.test_dataset,
             batch_size=self.test_batch_size,
             shuffle=False,
             drop_last=False,
@@ -150,7 +149,8 @@ class LogPredictionSamplesCallback(Callback):
         batch_idx,
         dataloader_idx,
     ):
-        """Called when the validation batch ends."""
+        """Called when the validation batch ends. This renders an image of the
+        reconstructed model next to the original model to compare results."""
 
         if batch_idx != 0:
             # We only want to generate prediction images on the first batch of the epoch
@@ -171,10 +171,14 @@ class LogPredictionSamplesCallback(Callback):
 
             fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
 
-        im = Image.frombytes(
-            "RGB", fig.canvas.get_width_height(), fig.canvas.tostring_rgb()
-        )
-        wandb_logger.log_image(key="samples", images=[im])
+        buf = io.BytesIO()
+        fig.savefig(buf)
+        buf.seek(0)
+        im = Image.open(buf)
+        # wandb_logger.log_image(key="samples", images=[im])
+        trainer.logger.experiment.log({
+            "samples": [wandb.Image(im)]
+        })
 
 
 def parsing(mode="args") -> Any:
@@ -345,6 +349,7 @@ def main():
     logging.info("Experiment name: %s", exp_name)
     logging.info("%s", args)
 
+    wandb_logger = WandbLogger(project="clip_forge", name=exp_name, log_model=True)
     wandb_logger.experiment.config.update(args)
 
     # Loading networks
@@ -367,14 +372,12 @@ def main():
     )
 
     checkpoint_callback = ModelCheckpoint(save_top_k=2, monitor="Loss/val")
-    trainer = pl.Trainer(logger=wandb_logger, callbacks=[checkpoint_callback])
+    sampling_callback = LogPredictionSamplesCallback()
+    trainer = pl.Trainer(logger=wandb_logger, callbacks=[checkpoint_callback, sampling_callback])
 
     if args.train_mode == "test":
         trainer.test(net, datamodule=datamodule)
     else:  # train mode
-        tuner = Tuner(trainer)
-        tuner.lr_find(net, datamodule=datamodule)
-        tuner.scale_batch_size(net, datamodule=datamodule, mode="binsearch")
         trainer.fit(net, datamodule=datamodule)
 
 

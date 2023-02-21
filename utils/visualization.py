@@ -205,7 +205,7 @@ def multiple_plot_voxel(batch_data_points, transpose=True):
 
     for i in range(len(batch_data_points)):
         plt_num = "1" + str(len(batch_data_points)) + str(i + 1)
-        ax = fig.add_subplot(plt_num, projection=Axes3D.name)
+        ax = fig.add_subplot(int(plt_num), projection=Axes3D.name)
         data_points = batch_data_points[i]
         # print(data_points.shape)
         if transpose == True:
