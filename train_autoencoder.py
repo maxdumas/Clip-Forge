@@ -1,8 +1,6 @@
 import argparse
 import io
-import logging
 import os
-import os.path as osp
 from typing import Any
 
 import pytorch_lightning as pl
@@ -29,7 +27,7 @@ def experiment_name(args):
         args.last_feature_transform,
     ]
 
-    if args.categories != None:
+    if args.categories is not None:
         for i in args.categories:
             tokens.append(i)
 
@@ -319,43 +317,14 @@ def main():
     args = parsing()
     exp_name = experiment_name(args)
 
-    manual_seed = args.seed
-    helper.set_seed(manual_seed)
+    helper.set_seed(args.seed)
 
-    # Create directories for checkpoints and logging
-    args.experiment_dir = osp.join("exps", exp_name)
-    args.checkpoint_dir = osp.join(args.experiment_dir, "checkpoints")
-    args.vis_dir = osp.join(args.experiment_dir, "vis_dir") + "/"
-    args.generate_dir = osp.join(args.experiment_dir, "generate_dir") + "/"
-
-    if args.train_mode == "test":
-        test_log_filename = osp.join(args.experiment_dir, "test_log.txt")
-        helper.setup_logging(test_log_filename, args.log_level, "w")
-        args.examplar_generate_dir = (
-            osp.join(args.experiment_dir, "exam_generate_dir") + "/"
-        )
-        helper.create_dir(args.examplar_generate_dir)
-        # The directory where generated images will be stored
-        args.vis_gen_dir = osp.join(args.experiment_dir, "vis_gen_dir") + "/"
-        helper.create_dir(args.vis_gen_dir)
-    else:
-        log_filename = osp.join("exps", exp_name, "log.txt")
-        helper.create_dir(args.experiment_dir)
-        helper.create_dir(args.checkpoint_dir)
-        helper.create_dir(args.vis_dir)
-        helper.create_dir(args.generate_dir)
-        helper.setup_logging(log_filename, args.log_level, "w")
-
-    logging.info("Experiment name: %s", exp_name)
-    logging.info("%s", args)
-
-    wandb_logger = WandbLogger(project="clip_forge", name=exp_name, log_model=True)
+    wandb_logger = WandbLogger(project="clip_forge", name=exp_name, log_model="all")
     wandb_logger.experiment.config.update(args)
 
     # Loading networks
     if args.checkpoint is not None:
-        checkpoint = torch.load(args.checkpoint_dir + "/" + args.checkpoint + ".pt")
-        net = Autoencoder.load_from_checkpoint(checkpoint)
+        net = Autoencoder.load_from_checkpoint(args.checkpoint)
     else:
         net = Autoencoder(args)
 
@@ -371,7 +340,7 @@ def main():
         args.sampling_type,
     )
 
-    checkpoint_callback = ModelCheckpoint(save_top_k=2, monitor="Loss/val")
+    checkpoint_callback = ModelCheckpoint(monitor="Loss/val", mode="min", every_n_epochs=5, save_last=True)
     sampling_callback = LogPredictionSamplesCallback()
     trainer = pl.Trainer(logger=wandb_logger, callbacks=[checkpoint_callback, sampling_callback])
 
