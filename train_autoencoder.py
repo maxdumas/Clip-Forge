@@ -4,8 +4,9 @@ import os.path as osp
 
 import numpy as np
 import torch
-from torch.optim import lr_scheduler
+from torch.optim import lr_scheduler, SGD, Adam
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from dataset import shapenet_dataset
 from networks import autoencoder
@@ -138,7 +139,7 @@ def get_dataloader(args, split="train"):
         return dataloader, total_shapes
 
     else:
-        raise ValueError("Dataset name is not defined {}".format(args.dataset_name))
+        raise ValueError(f"Dataset name is not defined {args.dataset_name}")
 
 
 ############################################# data loader #################################################
@@ -236,7 +237,7 @@ def val_one_epoch_iou(model, args, test_dataloader, epoch):
 
     loss_reconstruction = np.asarray(loss_reconstruction)
     loss_reconstruction = np.mean(loss_reconstruction)
-    logging.info("[Val]  Epoch {} IOU Loss: {}".format(epoch, loss_reconstruction))
+    logging.info("[Val]  Epoch %s IOU Loss: %s", epoch, loss_reconstruction)
     return loss_reconstruction
 
 
@@ -272,7 +273,7 @@ def val_one_epoch(model, args, test_dataloader, epoch):
 
     loss_reconstruction = np.asarray(loss_reconstruction)
     loss_reconstruction = np.mean(loss_reconstruction)
-    logging.info("[Val]  Epoch {} Loss: {}".format(epoch, loss_reconstruction))
+    logging.info("[Val]  Epoch %s Loss: %s", epoch, loss_reconstruction)
     return loss_reconstruction
 
 
@@ -282,52 +283,71 @@ def val_one_epoch(model, args, test_dataloader, epoch):
 
 
 def train_one_epoch(
-    model, args, train_dataloader, optimizer, scheduler, loss_meter, epoch
+    model: autoencoder.get_model,
+    args,
+    train_dataloader: DataLoader,
+    optimizer: SGD | Adam,
+    loss_meter: helper.AverageMeter,
+    epoch: int,
+    writer: SummaryWriter
 ):
     model.train()
-    loss_reconstruction = []
     iteration = 0
-    for data in train_dataloader:
-        iteration = iteration + 1
-        optimizer.zero_grad()
+    with torch.profiler.profile(
+        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(osp.join(args.experiment_dir, "tb_logs")),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True
+    ) as prof:
+        for data in train_dataloader:
+            iteration = iteration + 1
+            optimizer.zero_grad()
 
-        data["idx"].to(args.device)
+            data["idx"].to(args.device)
 
-        if args.input_type == "Voxel":
-            data_input = data["voxels"].type(torch.FloatTensor).to(args.device)
-        elif args.input_type == "Pointcloud":
-            data_input = (
-                data["pc_org"].type(torch.FloatTensor).to(args.device).transpose(-1, 1)
-            )
-
-        if args.output_type == "Implicit":
-            query_points, occ = data["points"], data["points.occ"]
-            query_points = query_points.type(torch.FloatTensor).to(args.device)
-            occ = occ.type(torch.FloatTensor).to(args.device)
-            gt = occ
-        elif args.output_type == "Pointcloud":
-            query_points = None
-            gt = data["pc_org"].type(torch.FloatTensor).to(args.device)
-
-        pred, shape_embs = model(data_input, query_points)
-
-        loss_reconstuct = model.reconstruction_loss(pred, gt)
-
-        loss = loss_reconstuct
-        loss.backward()
-        optimizer.step()
-        loss_meter.update(loss, data_input.size(0))
-
-        loss_reconstruction.append(loss_reconstuct.item())
-
-        if iteration % args.print_every == 0:
-            avg_reconstruction_loss = np.mean(np.asarray(loss_reconstruction))
-
-            logging.info(
-                "[Train]  Epoch {}, Iteration {} loss: {}, recon loss: {}".format(
-                    epoch, iteration, loss_meter.avg, avg_reconstruction_loss
+            # Load appropriate input data from the training set
+            if args.input_type == "Voxel":
+                data_input = data["voxels"].type(torch.FloatTensor).to(args.device)
+            elif args.input_type == "Pointcloud":
+                data_input = (
+                    data["pc_org"].type(torch.FloatTensor).to(args.device).transpose(-1, 1)
                 )
-            )
+
+            # Load appropriate output data from the training set
+            if args.output_type == "Implicit":
+                query_points = data["points"].type(torch.FloatTensor).to(args.device)
+                occ = data["points.occ"].type(torch.FloatTensor).to(args.device)
+                gt = occ
+            elif args.output_type == "Pointcloud":
+                query_points = None
+                gt = data["pc_org"].type(torch.FloatTensor).to(args.device)
+
+            # Run prediction
+            pred, shape_embs = model(data_input, query_points)
+
+            # Compute reconstruction loss
+            loss = model.reconstruction_loss(pred, gt)
+
+            # Compute loss gradient
+            loss.backward()
+
+            # Perform a single optimizer step, updating model parameters according
+            # to gradient
+            optimizer.step()
+            loss_meter.update(loss, data_input.size(0))
+
+            writer.add_scalar("Loss/train", loss, epoch * args.num_iterations + iteration)
+            prof.step()
+
+            # Log progress every N steps
+            if iteration % args.print_every == 0:
+                logging.info(
+                    "[Train]  Epoch %s, Iteration %s loss: %s",
+                    epoch,
+                    iteration,
+                    loss_meter.avg,
+                )
 
 
 ############################## training #################################################
@@ -411,7 +431,7 @@ def parsing(mode="args"):
         "--num_iterations",
         type=int,
         default=300000,
-        help="How long the training shoulf go on",
+        help="How long the training should go on",
     )
     parser.add_argument("--gpu", nargs="+", default="0", help="GPU list")
     parser.add_argument(
@@ -471,76 +491,78 @@ def main():
     args = parsing()
     exp_name = experiment_name(args)
 
-    manualSeed = args.seed
-    helper.set_seed(manualSeed)
+    manual_seed = args.seed
+    helper.set_seed(manual_seed)
 
     # Create directories for checkpoints and logging
     args.experiment_dir = osp.join("exps", exp_name)
-    args.checkpoint_dir = osp.join("exps", exp_name, "checkpoints")
-    args.vis_dir = osp.join("exps", exp_name, "vis_dir") + "/"
-    args.generate_dir = osp.join("exps", exp_name, "generate_dir") + "/"
+    args.checkpoint_dir = osp.join(args.experiment_dir, "checkpoints")
+    args.vis_dir = osp.join(args.experiment_dir, "vis_dir") + "/"
+    args.generate_dir = osp.join(args.experiment_dir, "generate_dir") + "/"
 
-    if args.train_mode != "test":
+    if args.train_mode == "test":
+        test_log_filename = osp.join(args.experiment_dir, "test_log.txt")
+        helper.setup_logging(test_log_filename, args.log_level, "w")
+        args.examplar_generate_dir = (
+            osp.join(args.experiment_dir, "exam_generate_dir") + "/"
+        )
+        helper.create_dir(args.examplar_generate_dir)
+        # The directory where generated images will be stored
+        args.vis_gen_dir = osp.join(args.experiment_dir, "vis_gen_dir") + "/"
+        helper.create_dir(args.vis_gen_dir)
+    else:
         log_filename = osp.join("exps", exp_name, "log.txt")
         helper.create_dir(args.experiment_dir)
         helper.create_dir(args.checkpoint_dir)
         helper.create_dir(args.vis_dir)
         helper.create_dir(args.generate_dir)
         helper.setup_logging(log_filename, args.log_level, "w")
-    else:
-        test_log_filename = osp.join("exps", exp_name, "test_log.txt")
-        helper.setup_logging(test_log_filename, args.log_level, "w")
-        args.examplar_generate_dir = (
-            osp.join("exps", exp_name, "exam_generate_dir") + "/"
-        )
-        helper.create_dir(args.examplar_generate_dir)
-        args.vis_gen_dir = osp.join("exps", exp_name, "vis_gen_dir") + "/"
-        helper.create_dir(args.vis_gen_dir)
 
-    logging.info("Experiment name: {}".format(exp_name))
-    logging.info("{}".format(args))
+    logging.info("Experiment name: %s", exp_name)
+    logging.info("%s", args)
 
     device, gpu_array = helper.get_device(args)
     args.device = device
 
-    logging.info("#############################")
+    writer = SummaryWriter(log_dir=osp.join(args.experiment_dir, "tb_logs"))
+
+    # Loading datasets
     train_dataloader, total_shapes = get_dataloader(args, split="train")
     args.total_shapes = total_shapes
-    logging.info("Train Dataset size: {}".format(total_shapes))
+    logging.info("Train Dataset size: %s", total_shapes)
     test_dataloader, total_shapes_test = get_dataloader(args, split="val")
-    logging.info("Test Dataset size: {}".format(total_shapes_test))
-    logging.info("#############################")
+    logging.info("Test Dataset size: %s", total_shapes_test)
 
-    #####
+    # Loading networks
     net = autoencoder.get_model(args).to(args.device)
     print(net)
-    logging.info("#############################")
 
     if args.train_mode == "test":
-        print("Test mode ")
-        print("Loading model....", args.checkpoint)
+        logging.info("Loading model %s...", args.checkpoint)
         checkpoint = torch.load(args.checkpoint_dir + "/" + args.checkpoint + ".pt")
         net.load_state_dict(checkpoint["model"])
 
         full_test_dataloader, total_shapes_test = get_dataloader(args, split="test")
-        logging.info("Test Dataset size: {}".format(total_shapes_test))
+        logging.info("Test Dataset size: %s", total_shapes_test)
 
         if args.output_type == "Implicit":
             test_iou = val_one_epoch_iou(net, args, full_test_dataloader, 0)
-            logging.info("Test iou {}".format(test_iou))
+            logging.info("Test iou %s", test_iou)
         elif args.output_type == "Pointcloud":
             test_val = val_one_epoch(net, args, full_test_dataloader, 0)
-            logging.info("Test val loss {}".format(test_val))
+            logging.info("Test val loss %s", test_val)
 
-    else:
+    else:  # train mode
         optimizer = helper.get_optimizer_model(args.optimizer, net, lr=args.lr)
         scheduler = lr_scheduler.CosineAnnealingLR(
             optimizer, args.num_iterations, 0.000001
         )
 
         start_epoch = 0
-        if args.checkpoint != None:
-            print("Loading model....", args.checkpoint)
+        # If a checkpoint is provided, intitialize network, optimizer, and
+        # schedule with checkpoint configuration.
+        if args.checkpoint is not None:
+            logging.info("Loading model... %s", args.checkpoint)
             checkpoint = torch.load(args.checkpoint_dir + "/" + args.checkpoint + ".pt")
             net.load_state_dict(checkpoint["model"])
 
@@ -554,20 +576,20 @@ def main():
         for epoch in range(start_epoch, args.epochs):
             loss_meter = helper.AverageMeter()
             logging.info("#############################")
-            # val_iou = val_one_epoch_iou(net, args, test_dataloader, epoch)
+
             train_one_epoch(
-                net, args, train_dataloader, optimizer, scheduler, loss_meter, epoch
+                net, args, train_dataloader, optimizer, loss_meter, epoch, writer
             )
 
-            if (epoch + 1) % 5 == True:
+            if (epoch + 1) % 5 == 0:
                 visualization_model(net, args, test_dataloader, epoch)
 
             if args.output_type == "Implicit":
                 val_iou = val_one_epoch_iou(net, args, test_dataloader, epoch)
                 if best_iou < val_iou:
                     best_iou = val_iou
-                    filename = "{}.pt".format("best_iou")
-                    logging.info("Saving Model........{}".format(filename))
+                    filename = "best_iou.pt"
+                    logging.info("Saving Model... %s", filename)
                     helper.save_checkpoint(
                         osp.join(args.checkpoint_dir, filename),
                         net,
@@ -580,8 +602,8 @@ def main():
                 val_loss = val_one_epoch(net, args, test_dataloader, epoch)
                 if best_loss > val_loss:
                     best_loss = val_loss
-                    filename = "{}.pt".format("best")
-                    logging.info("Saving Model........{}".format(filename))
+                    filename = "best.pt"
+                    logging.info("Saving Model... %s", filename)
                     helper.save_checkpoint(
                         osp.join(args.checkpoint_dir, filename),
                         net,
@@ -591,8 +613,8 @@ def main():
                         epoch,
                     )
 
-            filename = "{}.pt".format("last")
-            logging.info("Saving Model........{}".format(filename))
+            filename = "last.pt"
+            logging.info("Saving Model... %s", filename)
             helper.save_checkpoint(
                 osp.join(args.checkpoint_dir, filename),
                 net,

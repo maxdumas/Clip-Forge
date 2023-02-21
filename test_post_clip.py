@@ -469,6 +469,12 @@ def get_local_parser_test(mode="args"):
         type=str,
         default="save_voxel_on_query",
         metavar="N",
+        choices=[
+            "fid_cal",
+            "cls_cal_single",
+            "cls_cal_category",
+            "save_voxel_on_query",
+        ],
         help="experiment type",
     )
     parser.add_argument(
@@ -528,8 +534,8 @@ def main():
     args.vis_gen_dir = osp.join(args.output_dir, "vis_gen_dir") + "/"
     helper.create_dir(args.vis_gen_dir)
 
-    manualSeed = args.seed_nf
-    helper.set_seed(manualSeed)
+    manual_seed = args.seed_nf
+    helper.set_seed(manual_seed)
 
     ### Dataloader stuff
     if args.experiment_mode not in [
@@ -551,24 +557,18 @@ def main():
 
     # device, gpu_array = helper.get_device(args)
     # TODO: Set this correctly. We should be able to set this to MPS but when we do so, generated results become NaN.
-    args.device = "cpu"
-    device = "cpu"
+    args.device = "cuda"
+    device = "cuda"
 
     ### Network stuff
     logging.info("#############################")
 
     net = autoencoder.get_model(args).to(args.device)
-    checkpoint = torch.load(
-        args.checkpoint_dir_base + "/" + args.checkpoint + ".pt",
-        map_location=args.device,
-    )
+    checkpoint_path = args.checkpoint_dir_base + "/" + args.checkpoint + ".pt"
+    checkpoint = torch.load(checkpoint_path, map_location=args.device)
     net.load_state_dict(checkpoint["model"])
     net.eval()
-    logging.info(
-        "Loaded the autoencoder: {}".format(
-            args.checkpoint_dir_base + "/" + args.checkpoint + ".pt"
-        )
-    )
+    logging.info("Loaded the autoencoder: %s", checkpoint_path)
 
     args, clip_model = get_clip_model(args)
 
@@ -584,7 +584,7 @@ def main():
     checkpoint_nf_path = os.path.join(
         args.checkpoint_dir_prior, args.checkpoint_nf + ".pt"
     )
-    logging.info("Loaded the nf model: {}".format(checkpoint_nf_path))
+    logging.info("Loaded the nf model: %s", checkpoint_nf_path)
 
     checkpoint = torch.load(checkpoint_nf_path, map_location=args.device)
     latent_flow_network.load_state_dict(checkpoint["model"])
@@ -592,7 +592,7 @@ def main():
 
     logging.info("#############################")
 
-    logging.info("Conducting the experiment {}".format(args.experiment_mode))
+    logging.info("Conducting the experiment %s", args.experiment_mode)
 
     if args.experiment_mode == "fid_cal":
         torch.multiprocessing.set_sharing_strategy("file_system")
@@ -601,12 +601,10 @@ def main():
         )
         true_voxels = get_true_voxels(test_dataloader, args)
         logging.info(
-            "Size of  generated {} and true voxel is {}".format(
-                generated_voxels.shape, true_voxels.shape
-            )
+            "Size of  generated %s and true voxel is %s",
+            generated_voxels.shape,
+            true_voxels.shape,
         )
-
-
 
         cls = classifier.classifier_32("Voxel_Encoder_BN", 13).to(args.device)
         cls_checkpoint = torch.load(
@@ -617,15 +615,15 @@ def main():
         activations2, _ = classifier.get_activations(generated_voxels, cls, args)
 
         logging.info(
-            "Size of activatation for true {} and generated voxel is {}".format(
-                activations1.shape, activations2.shape
-            )
+            "Size of activatation for true %s and generated voxel is %s",
+            activations1.shape,
+            activations2.shape,
         )
 
         mu1, sigma1 = calculate_activation_statistics(activations1)
         mu2, sigma2 = calculate_activation_statistics(activations2)
         fid_score = calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6)
-        logging.info("FID score is: {}".format(fid_score))
+        logging.info("FID score is: %s", fid_score)
 
     elif args.experiment_mode == "cls_cal_single":
         torch.multiprocessing.set_sharing_strategy("file_system")
@@ -633,9 +631,9 @@ def main():
             net, latent_flow_network, clip_model, args, num_figs_per_query=1
         )
         logging.info(
-            "Size of  generated voxel is {} and label length {}".format(
-                generated_voxels.shape, len(query_labels)
-            )
+            "Size of  generated voxel is %s and label length %s",
+            generated_voxels.shape,
+            len(query_labels),
         )
 
         cls = classifier.classifier_32("Voxel_Encoder_BN", 13).to(args.device)
@@ -648,13 +646,13 @@ def main():
             generated_voxels, cls, args
         )
         logging.info(
-            "Size of  activations  is {} and pred labels is {}".format(
-                activations.shape, pred_labels.shape
-            )
+            "Size of  activations  is %s and pred labels is %s",
+            activations.shape,
+            pred_labels.shape,
         )
 
         acc = 100 * accuracy_score(query_labels, pred_labels)
-        logging.info("Cls score is: {}".format(acc))
+        logging.info("Cls score is: %s", acc)
     elif args.experiment_mode == "cls_cal_category":
         torch.multiprocessing.set_sharing_strategy("file_system")
         generated_voxels, query_labels = generate_voxel_32(
@@ -662,12 +660,10 @@ def main():
         )
 
         logging.info(
-            "Size of  generated voxel is {} and label length {}".format(
-                generated_voxels.shape, len(query_labels)
-            )
+            "Size of  generated voxel is %s and label length %s",
+            generated_voxels.shape,
+            len(query_labels),
         )
-
-
 
         cls = classifier.classifier_32("Voxel_Encoder_BN", 13).to(args.device)
         cls_checkpoint = torch.load(
@@ -679,25 +675,26 @@ def main():
             generated_voxels, cls, args
         )
         logging.info(
-            "Size of  activations  is {} and pred labels is {}".format(
-                activations.shape, pred_labels.shape
-            )
+            "Size of  activations  is %s and pred labels is %s",
+            activations.shape,
+            pred_labels.shape,
         )
 
         conf_matrix = confusion_matrix(query_labels, pred_labels)
         count = 0
-        for i in conf_matrix:
+        for _ in conf_matrix:
             category_name = label_to_category[count]
             total_labels = query_labels.count(count)
             acc = (conf_matrix[count, count] / total_labels) * 100
             logging.info(
-                "Cls score for class {}, total labels {} is: {}".format(
-                    category_name, total_labels, acc
-                )
+                "Cls score for class %s, total labels %s is: %s",
+                category_name,
+                total_labels,
+                acc,
             )
             count = count + 1
         acc = 100 * accuracy_score(query_labels, pred_labels)
-        logging.info("Cls score is: {}".format(acc))
+        logging.info("Cls score is: %s", acc)
     elif args.experiment_mode == "save_voxel_on_query":
         save_path = args.vis_gen_dir
         if not os.path.exists(save_path):
