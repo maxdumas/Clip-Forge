@@ -3,15 +3,19 @@ import logging
 import os.path as osp
 from typing import Any
 
-import torch
-from torch.utils.data import DataLoader
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
+import torch
+from PIL import Image
+from pytorch_lightning.callbacks import Callback, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
+from torch.utils.data import DataLoader
 
 from dataset import shapenet_dataset
 from networks.autoencoder import Autoencoder
-from utils import helper, visualization
+from utils import helper
+from utils.visualization import multiple_plot_voxel, plot_real_pred
+
+wandb_logger = WandbLogger(name="clip_forge/autoencoder", log_model=True)
 
 
 def experiment_name(args):
@@ -131,57 +135,41 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
         )
 
 
-def visualization_model(model, args, test_dataloader, name_info):
-    model.eval()
-    test_loader = iter(test_dataloader)
-    data = next(test_loader)
+class LogPredictionSamplesCallback(Callback):
+    def on_validation_batch_end(
+        self,
+        trainer,
+        pl_module: Autoencoder,
+        outputs: torch.Tensor,
+        batch,
+        batch_idx,
+        dataloader_idx,
+    ):
+        """Called when the validation batch ends."""
 
-    if args.input_type == "Voxel":
-        data_input = data["voxels"].type(torch.FloatTensor).to(args.device)
-    elif args.input_type == "Pointcloud":
-        data_input = (
-            data["pc_org"].type(torch.FloatTensor).to(args.device).transpose(-1, 1)
-        )
+        if batch_idx != 0:
+            # We only want to generate prediction images on the first batch of the epoch
+            return
 
-    if args.output_type == "Implicit":
-        voxel_32 = data["voxels"].type(torch.FloatTensor).to(args.device)
-        voxel_size = 32
-        shape = (voxel_size, voxel_size, voxel_size)
-        p = 1.1 * visualization.make_3d_grid([-0.5] * 3, [+0.5] * 3, shape).type(
-            torch.FloatTensor
-        ).to(args.device)
-        query_points = p.expand(args.test_batch_size, *p.size())
-    elif args.output_type == "Pointcloud":
-        query_points = None
-        gt = data["pc_org"].type(torch.FloatTensor).to(args.device)
+        if pl_module.output_type == "Implicit":
+            voxel_32 = batch["voxels"].type(torch.FloatTensor)
+            voxel_size = 32
 
-    with torch.no_grad():
-        pred, decoder_embs = model(data_input, query_points)
-
-        if name_info is not None:
-            save_loc = args.vis_dir + "/" + str(name_info) + "_"
-        else:
-            save_loc = args.vis_dir + "/"
-
-        if args.output_type == "Implicit":
             voxels_out = (
-                (pred[0].view(voxel_size, voxel_size, voxel_size) > args.threshold)
-                .detach()
-                .cpu()
-                .numpy()
-            )
-            real = voxel_32[0].detach().cpu().numpy()
-            visualization.multiple_plot_voxel(
-                [real, voxels_out], save_loc=save_loc + "real_pred.png"
-            )
-            # visualization.save_mesh(voxels_out, out_file=save_loc + "pred.obj")
-        elif args.output_type == "Pointcloud":
-            visualization.plot_real_pred(
-                gt.detach().cpu().numpy(),
-                pred.detach().cpu().numpy(),
-                1,
-                save_loc=save_loc + "real_pred.png",
-            )
+                outputs[0].view(voxel_size, voxel_size, voxel_size)
+                > pl_module.args.threshold
+            ).numpy()
+            real = voxel_32[0].numpy()
+            fig = multiple_plot_voxel([real, voxels_out])
+        elif pl_module.output_type == "Pointcloud":
+            gt = batch["pc_org"].type(torch.FloatTensor)
+
+            fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
+
+        im = Image.frombytes(
+            "RGB", fig.canvas.get_width_height(), fig.canvas.tostring_rgb()
+        )
+        wandb_logger.log_image(key="samples", images=[im])
 
 
 def parsing(mode="args") -> Any:
@@ -352,8 +340,7 @@ def main():
     logging.info("Experiment name: %s", exp_name)
     logging.info("%s", args)
 
-    wandb = WandbLogger(name="clip_forge/autoencoder", log_model=True)
-    wandb.experiment.config.update(args)
+    wandb_logger.experiment.config.update(args)
 
     # Loading networks
     if args.checkpoint is not None:
@@ -375,7 +362,7 @@ def main():
     )
 
     checkpoint_callback = ModelCheckpoint(save_top_k=2, monitor="Loss/val")
-    trainer = pl.Trainer(logger=wandb, callbacks=[checkpoint_callback])
+    trainer = pl.Trainer(logger=wandb_logger, callbacks=[checkpoint_callback])
 
     if args.train_mode == "test":
         trainer.test(net, datamodule=datamodule)

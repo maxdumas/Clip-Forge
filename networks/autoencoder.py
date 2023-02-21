@@ -371,3 +371,5 @@ class Autoencoder(pl.LightningModule):
             loss = self.reconstruction_loss(pred, gt)
 
         self.log("Loss/val", loss)
+
+        return pred
