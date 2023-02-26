@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
@@ -15,7 +16,7 @@ EPS = 1e-6
 
 
 # borrowed from https://github.com/ThibaultGROUEIX/AtlasNet
-def dist_chamfer(a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def dist_chamfer(a: Tensor, b: Tensor) -> tuple[Tensor, Tensor]:
     x, y = a, b
     bs, num_points, points_dim = x.size()
     xx = torch.bmm(x, x.transpose(2, 1))
@@ -151,7 +152,7 @@ class VoxelEncoderBN(nn.Module):
 
         self.last_feature_transform = last_feature_transform
 
-    def forward(self, x):
+    def forward(self, x: Tensor):
         batch_size = x.size(0)
         x = x.unsqueeze(1)
         net = self.conv_in(x)
@@ -195,9 +196,7 @@ class Occ_Simple_Decoder(nn.Module):
 
         self.last_sig = last_sig
 
-    def forward(self, p, z):
-        batch_size, T, D = p.size()
-
+    def forward(self, p: Tensor, z: Tensor):
         net = self.fc_p(p)
 
         net_z = self.fc_z(z).unsqueeze(1)
@@ -221,30 +220,31 @@ class Occ_Simple_Decoder(nn.Module):
 ####################################################################################################
 ####################################################################################################
 
-def compute_iou(occ1, occ2):
+
+def compute_iou(occ1: Tensor, occ2: Tensor):
     """Computes the Intersection over Union (IoU) value for two sets of
     occupancy values.
     Args:
         occ1 (tensor): first set of occupancy values
         occ2 (tensor): second set of occupancy values
     """
-    occ1 = np.asarray(occ1)
-    occ2 = np.asarray(occ2)
+    a: np.ndarray = occ1.cpu().numpy()
+    b: np.ndarray = occ2.cpu().numpy()
 
     # Put all data in second dimension
     # Also works for 1-dimensional data
-    if occ1.ndim >= 2:
-        occ1 = occ1.reshape(occ1.shape[0], -1)
-    if occ2.ndim >= 2:
-        occ2 = occ2.reshape(occ2.shape[0], -1)
+    if a.ndim >= 2:
+        a = a.reshape(a.shape[0], -1)
+    if b.ndim >= 2:
+        b = b.reshape(b.shape[0], -1)
 
     # Convert to boolean values
-    occ1 = occ1 >= 0.5
-    occ2 = occ2 >= 0.5
+    a = a >= 0.5
+    b = b >= 0.5
 
     # Compute IOU
-    area_union = (occ1 | occ2).astype(np.float32).sum(axis=-1)
-    area_intersect = (occ1 & occ2).astype(np.float32).sum(axis=-1)
+    area_union = (a | b).astype(np.float32).sum(axis=-1)
+    area_intersect = (a & b).astype(np.float32).sum(axis=-1)
 
     iou = area_intersect / area_union
 
@@ -295,7 +295,7 @@ class Autoencoder(pl.LightningModule):
         else:
             raise ValueError("The output representation is not implemented")
 
-    def reconstruction_loss(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    def reconstruction_loss(self, pred: Tensor, gt: Tensor) -> Tensor:
         if self.output_type == "Implicit":
             return torch.mean((pred.squeeze(-1) - gt) ** 2)
         elif self.output_type == "Pointcloud":
@@ -304,33 +304,35 @@ class Autoencoder(pl.LightningModule):
         else:
             raise ValueError("The output representation is not implemented")
 
-    def forward(self, data_input, query_points=None):
+    def forward(self, data_input, query_points=None) -> tuple[Tensor, Tensor]:
         shape_embs = self.encoder(data_input)
         pred = self.decoding(shape_embs, points=query_points)
         return pred, shape_embs
 
     def configure_optimizers(self):
-        optimizer = get_optimizer_model(self.args.optimizer, self, lr=self.learning_rate)
+        optimizer = get_optimizer_model(
+            self.args.optimizer, self, lr=self.learning_rate
+        )
         return optimizer
 
     def training_step(self, data, batch_idx):
         # Load appropriate input data from the training set
         if self.args.input_type == "Voxel":
-            data_input = data["voxels"].type(torch.FloatTensor)
+            data_input = data["voxels"]
         elif self.args.input_type == "Pointcloud":
-            data_input = data["pc_org"].type(torch.FloatTensor).transpose(-1, 1)
+            data_input = data["pc_org"].transpose(-1, 1)
 
         # Load appropriate output data from the training set
         if self.args.output_type == "Implicit":
-            query_points = data["points"].type(torch.FloatTensor)
-            occ = data["points.occ"].type(torch.FloatTensor)
+            query_points = data["points"]
+            occ = data["points.occ"]
             gt = occ
         elif self.args.output_type == "Pointcloud":
             query_points = None
-            gt = data["pc_org"].type(torch.FloatTensor)
+            gt = data["pc_org"]
 
         # Run prediction
-        pred, shape_embs = self.forward(data_input, query_points)
+        pred, _ = self.forward(data_input, query_points)
 
         # Compute reconstruction loss
         loss = self.reconstruction_loss(pred, gt)
@@ -341,28 +343,30 @@ class Autoencoder(pl.LightningModule):
 
     def validation_step(self, data, data_idx):
         if self.args.input_type == "Voxel":
-            data_input = data["voxels"].type(torch.FloatTensor)
+            data_input = data["voxels"]
         elif self.args.input_type == "Pointcloud":
-            data_input = data["pc_org"].type(torch.FloatTensor).transpose(-1, 1)
+            data_input = data["pc_org"].transpose(-1, 1)
 
         if self.args.output_type == "Implicit":
             # Compute IOU loss for Implicit representation
-            points_voxels = (
-                    make_3d_grid((-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3)
-                    .type(torch.FloatTensor)
-                )
-            query_points = points_voxels.expand(self.args.test_batch_size, *points_voxels.size())
-            
+            points_voxels = make_3d_grid(
+                (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
+            ).to("cuda") # TODO: Do this in the correct way
+            query_points = points_voxels.expand(
+                self.args.test_batch_size, *points_voxels.size()
+            )
 
-            voxels_occ_np = (data["voxels"] >= 0.5).cpu().numpy()
 
             if self.args.test_batch_size != data_input.size(0):
                 query_points = points_voxels.expand(
                     data_input.size(0), *points_voxels.size()
                 )
 
+            # Run prediction
             pred, _ = self.forward(data_input, query_points)
 
+            # Compute reconstruction loss
+            voxels_occ_np = data["voxels"] >= 0.5
             occ_hat_np = pred >= self.args.threshold
             iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
             loss = iou_voxels.item()

@@ -1,7 +1,7 @@
 import argparse
 import io
 import os
-from typing import Any
+from typing import Any, Optional
 
 import pytorch_lightning as pl
 import torch
@@ -17,39 +17,18 @@ from utils import helper
 from utils.visualization import multiple_plot_voxel, plot_real_pred
 
 
-def experiment_name(args):
-    tokens = [
-        "Autoencoder",
-        args.dataset_name,
-        args.input_type,
-        args.output_type,
-        args.emb_dims,
-        args.last_feature_transform,
-    ]
-
-    if args.categories is not None:
-        for i in args.categories:
-            tokens.append(i)
-
-    if args.num_sdf_points != 5000:
-        tokens.append(args.num_sdf_points)
-
-    tokens.append(args.seed)
-    return "_".join(map(str, tokens))
-
-
 class AutoencoderShapeNetDataModule(pl.LightningDataModule):
     def __init__(
         self,
         dataset_name: str,
         dataset_path: str,
-        categories: list[str] | None,
+        categories: Optional[list[str]],
         batch_size: int = 32,
         test_batch_size: int = 32,
         num_points: int = 2025,
         num_sdf_points: int = 5000,
         test_num_sdf_points: int = 5000,
-        sampling_type: str | None = None,
+        sampling_type: Optional[str] = None,
     ):
         super().__init__()
 
@@ -227,7 +206,7 @@ def parsing(mode="args") -> Any:
     )
 
     ### Dataset details
-    parser.add_argument("--dataset_path", type=str, default=None, help="Dataset path")
+    parser.add_argument("--dataset_path", type=str, default=os.environ["SM_CHANNEL_TRAIN"], help="Dataset path")
     parser.add_argument(
         "--dataset_name", type=str, default="Shapenet", help="Dataset path"
     )
@@ -315,11 +294,9 @@ def parsing(mode="args") -> Any:
 
 def main():
     args = parsing()
-    exp_name = experiment_name(args)
-
     helper.set_seed(args.seed)
 
-    wandb_logger = WandbLogger(project="clip_forge", name=exp_name, log_model="all")
+    wandb_logger = WandbLogger(project="clip_forge", name=os.environ["TRAINING_JOB_NAME"], log_model="all")
     wandb_logger.experiment.config.update(args)
 
     # Loading networks
@@ -327,6 +304,8 @@ def main():
         net = Autoencoder.load_from_checkpoint(args.checkpoint)
     else:
         net = Autoencoder(args)
+
+    wandb_logger.watch(net)
 
     datamodule = AutoencoderShapeNetDataModule(
         args.dataset_name,
@@ -340,9 +319,9 @@ def main():
         args.sampling_type,
     )
 
-    checkpoint_callback = ModelCheckpoint(monitor="Loss/val", mode="min", every_n_epochs=5, save_last=True)
+    checkpoint_callback = ModelCheckpoint(os.environ["SM_MODEL_DIR"], monitor="Loss/val", mode="min", every_n_epochs=5, save_last=True)
     sampling_callback = LogPredictionSamplesCallback()
-    trainer = pl.Trainer(logger=wandb_logger, callbacks=[checkpoint_callback, sampling_callback])
+    trainer = pl.Trainer(logger=wandb_logger, callbacks=[checkpoint_callback, sampling_callback], accelerator="gpu", devices=os.environ["SM_NUM_GPUS"])
 
     if args.train_mode == "test":
         trainer.test(net, datamodule=datamodule)

@@ -1,0 +1,5 @@
+# Requirements to be installed when running in SageMaker
+
+wandb
+pytorch_lightning
+trimesh
