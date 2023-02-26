@@ -425,7 +425,7 @@ class Shapes3dDataset(Dataset):
         for c_idx, c in enumerate(categories):
             subpath = os.path.join(dataset_folder, c)
             if not os.path.isdir(subpath):
-                logger.warning("Category %s does not exist in dataset." % c)
+                logger.warning("Category %s does not exist in dataset.", c)
 
             split_file = os.path.join(subpath, split + ".lst")
             with open(split_file, "r") as f:

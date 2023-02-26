@@ -3,10 +3,11 @@ import io
 import os
 from typing import Any, Optional
 
+import matplotlib.pyplot as plt
 import pytorch_lightning as pl
 import torch
 from PIL import Image
-from pytorch_lightning.callbacks import Callback, ModelCheckpoint
+from pytorch_lightning.callbacks import Callback, ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers.wandb import WandbLogger
 from torch.utils.data import DataLoader
 
@@ -138,10 +139,14 @@ class LogPredictionSamplesCallback(Callback):
             voxel_size = 32
 
             voxels_out = (
-                outputs[0].view(voxel_size, voxel_size, voxel_size)
-                > pl_module.args.threshold
-            ).numpy()
-            real = voxel_32[0].numpy()
+                (
+                    outputs[0].view(voxel_size, voxel_size, voxel_size)
+                    > pl_module.args.threshold
+                )
+                .cpu()
+                .numpy()
+            )
+            real = voxel_32[0].cpu().numpy()
             fig = multiple_plot_voxel([real, voxels_out])
         elif pl_module.output_type == "Pointcloud":
             gt = batch["pc_org"].type(torch.FloatTensor)
@@ -152,10 +157,8 @@ class LogPredictionSamplesCallback(Callback):
         fig.savefig(buf)
         buf.seek(0)
         im = Image.open(buf)
-        # wandb_logger.log_image(key="samples", images=[im])
-        trainer.logger.experiment.log({
-            "samples": [wandb.Image(im)]
-        })
+        trainer.logger.experiment.log({"samples": [wandb.Image(im)]})
+        plt.close(fig)
 
 
 def parsing(mode="args") -> Any:
@@ -206,7 +209,12 @@ def parsing(mode="args") -> Any:
     )
 
     ### Dataset details
-    parser.add_argument("--dataset_path", type=str, default=os.environ["SM_CHANNEL_TRAIN"], help="Dataset path")
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        default=os.environ["SM_CHANNEL_TRAIN"],
+        help="Dataset path",
+    )
     parser.add_argument(
         "--dataset_name", type=str, default="Shapenet", help="Dataset path"
     )
@@ -218,27 +226,17 @@ def parsing(mode="args") -> Any:
         "--test_num_sdf_points", type=int, default=30000, help="Number of points"
     )
     parser.add_argument("--categories", nargs="+", default=None, metavar="N")
-    parser.add_argument("--num_workers", type=int, default=4, help="Number of workers")
 
     ### training details
     parser.add_argument("--train_mode", type=str, default="train", help="train or test")
     parser.add_argument("--seed", type=int, default=1, help="Seed")
     parser.add_argument("--epochs", type=int, default=300, help="Total epochs")
     parser.add_argument(
-        "--checkpoint", type=str, default=None, help="Checkpoint to load"
+        "--checkpoint", type=str, default=None, help="The name of a Weights & Biases Checkpoint to load and use"
     )
     parser.add_argument(
-        "--use_timestamp",
-        action="store_true",
-        help="Whether to use timestamp in dump files",
+        "--gpus", nargs="+", default=os.environ.get("SM_NUM_GPUS", "0"), help="GPU list"
     )
-    parser.add_argument(
-        "--num_iterations",
-        type=int,
-        default=300000,
-        help="How long the training should go on",
-    )
-    parser.add_argument("--gpu", nargs="+", default="0", help="GPU list")
     parser.add_argument(
         "--optimizer", type=str, choices=("SGD", "Adam"), default="Adam"
     )
@@ -259,32 +257,6 @@ def parsing(mode="args") -> Any:
         help="what sampling type: None--> Uniform",
     )
 
-    ### Logging details
-    parser.add_argument(
-        "--print_every", type=int, default=50, help="Printing the loss every"
-    )
-    parser.add_argument(
-        "--save_every", type=int, default=50, help="Saving the model every"
-    )
-    parser.add_argument(
-        "--validation_every", type=int, default=5000, help="validation set every"
-    )
-    parser.add_argument(
-        "--visualization_every",
-        type=int,
-        default=10,
-        help="visualization of the results every",
-    )
-    parser.add_argument(
-        "--log-level", type=str, choices=("info", "warn", "error"), default="info"
-    )
-    parser.add_argument(
-        "--experiment_type", type=str, default="max", help="experiment type"
-    )
-    parser.add_argument(
-        "--experiment_every", type=int, default=5, help="experiment every "
-    )
-
     if mode == "args":
         args = parser.parse_args()
         return args
@@ -296,12 +268,31 @@ def main():
     args = parsing()
     helper.set_seed(args.seed)
 
-    wandb_logger = WandbLogger(project="clip_forge", name=os.environ["TRAINING_JOB_NAME"], log_model="all")
+    torch.set_float32_matmul_precision("medium")
+
+    wandb_logger = WandbLogger(
+        project="clip_forge",
+        name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-autoencoder"),
+        log_model="all",
+    )
     wandb_logger.experiment.config.update(args)
 
     # Loading networks
     if args.checkpoint is not None:
-        net = Autoencoder.load_from_checkpoint(args.checkpoint)
+        # If a checkpoint name is explicitly provided, load that checkpoint
+        checkpoint = wandb_logger.use_artifact(args.checkpoint, "model")
+        checkpoint_dir = checkpoint.download()
+        checkpoint_path = os.path.join(checkpoint_dir, "model.ckpt")
+        print(f"Loading specified W&B Checkpoint from {checkpoint_path}.")
+        net = Autoencoder.load_from_checkpoint(checkpoint_path)
+    elif os.path.exists(os.path.join("/opt/ml/checkpoints", "last.ckpt")):
+        # Restore any checkpoint present in /opt/ml/checkpoints, as this
+        # represents a checkpoint that was pre-loaded from SageMaker. We need to
+        # do this in order to be able to use Spot training, as we need this
+        # script to be able to automatically recover after being interrupted.
+        checkpoint_path = os.path.join("/opt/ml/checkpoints", "last.ckpt")
+        print(f"Auto-loading existing SageMaker checkpoint from {checkpoint_path}. Are we resuming after an interruption?")
+        net = Autoencoder.load_from_checkpoint(checkpoint_path)
     else:
         net = Autoencoder(args)
 
@@ -319,15 +310,28 @@ def main():
         args.sampling_type,
     )
 
-    checkpoint_callback = ModelCheckpoint(os.environ["SM_MODEL_DIR"], monitor="Loss/val", mode="min", every_n_epochs=5, save_last=True)
+    checkpoint_callback = ModelCheckpoint(
+        "/opt/ml/checkpoints",
+        monitor="Loss/val",
+        mode="max",
+        every_n_epochs=5,
+        save_last=True,
+    )
+    early_stop_callback = EarlyStopping(monitor="Loss/val", mode="max")
     sampling_callback = LogPredictionSamplesCallback()
-    trainer = pl.Trainer(logger=wandb_logger, callbacks=[checkpoint_callback, sampling_callback], accelerator="gpu", devices=os.environ["SM_NUM_GPUS"])
+    trainer = pl.Trainer(
+        max_epochs=args.epochs,
+        logger=wandb_logger,
+        callbacks=[checkpoint_callback, early_stop_callback, sampling_callback],
+        accelerator="gpu",
+        devices=args.gpus,
+        precision=16,
+    )
 
     if args.train_mode == "test":
         trainer.test(net, datamodule=datamodule)
     else:  # train mode
         trainer.fit(net, datamodule=datamodule)
-
 
 if __name__ == "__main__":
     main()

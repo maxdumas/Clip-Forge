@@ -351,7 +351,7 @@ class Autoencoder(pl.LightningModule):
             # Compute IOU loss for Implicit representation
             points_voxels = make_3d_grid(
                 (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
-            ).to("cuda") # TODO: Do this in the correct way
+            ).to(self.device) # TODO: Do this in the correct way
             query_points = points_voxels.expand(
                 self.args.test_batch_size, *points_voxels.size()
             )
@@ -372,7 +372,7 @@ class Autoencoder(pl.LightningModule):
             loss = iou_voxels.item()
         elif self.args.output_type == "Pointcloud":
             query_points = None
-            gt = data["pc_org"].type(torch.FloatTensor)
+            gt = data["pc_org"]
 
             pred, _ = self.forward(data_input, query_points)
             loss = self.reconstruction_loss(pred, gt)
