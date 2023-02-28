@@ -1,20 +1,27 @@
+import argparse
+import io
 import logging
-import os.path as osp
+import os
 from typing import Any
 
 import clip
+import matplotlib.pyplot as plt
 import numpy as np
+import pytorch_lightning as pl
 import torch
 from clip.model import CLIP
+from PIL import Image
+from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
+from pytorch_lightning.loggers.wandb import WandbLogger
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+import wandb
 from dataset import shapenet_dataset
-from networks import latent_flows
 from networks.autoencoder import Autoencoder
-from train_autoencoder import experiment_name, parsing
-from utils import helper, visualization
+from networks.latent_flows import LatentFlows
+from utils import helper
+from utils.visualization import make_3d_grid, multiple_plot, multiple_plot_voxel
 
 
 def experiment_name2(args):
@@ -198,144 +205,81 @@ def get_condition_embeddings(
     )
 
 
-def generate_on_query_text(args, clip_model, autoencoder, latent_flow_model):
-    autoencoder.eval()
-    latent_flow_model.eval()
-    clip_model.eval()
-    save_loc = args.generate_dir + "/"
-    num_figs = 3
-    with torch.no_grad():
+class LogPredictionSamplesCallback(Callback):
+    def __init__(
+        self,
+        text_query: list[str],
+        threshold: float,
+        output_type: str,
+        autoencoder: Autoencoder,
+        clip_model: CLIP,
+    ) -> None:
+        super().__init__()
+        self.text_query = text_query
+        self.threshold = threshold
+        self.output_type = output_type
+        self.autoencoder = autoencoder
+        self.clip_model = clip_model
+
+    def on_validation_batch_end(
+        self,
+        trainer,
+        pl_module: LatentFlows,
+        outputs: torch.Tensor,
+        batch,
+        batch_idx,
+        dataloader_idx,
+    ):
+        """Called when the validation batch ends. This renders an image of the
+        reconstructed model next to the original model to compare results."""
+
+        num_figs = 3
         voxel_size = 32
         shape = (voxel_size, voxel_size, voxel_size)
-        p = (
-            visualization.make_3d_grid([-0.5] * 3, [+0.5] * 3, shape)
-            .type(torch.FloatTensor)
-            .to(args.device)
-        )
+        p = make_3d_grid([-0.5] * 3, [+0.5] * 3, shape)
         query_points = p.expand(num_figs, *p.size())
 
-        for text_in in args.text_query:
-            text = clip.tokenize([text_in]).to(args.device)
-            text_features = clip_model.encode_text(text)
+        if batch_idx != 0:
+            # We only want to generate prediction images on the first batch of the epoch
+            return
+
+        for text_in in self.text_query:
+            text = clip.tokenize([text_in])
+            text_features = self.clip_model.encode_text(text)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
-            noise = torch.Tensor(num_figs, args.emb_dims).normal_().to(args.device)
-            decoder_embs = latent_flow_model.sample(
+            noise = torch.Tensor(num_figs, pl_module.num_inputs).normal_()
+            decoder_embs = pl_module.sample(
                 num_figs, noise=noise, cond_inputs=text_features.repeat(num_figs, 1)
             )
 
-            out = autoencoder.decoding(decoder_embs, query_points)
+            out = self.autoencoder.decoding(decoder_embs, query_points)
 
-            if args.output_type == "Implicit":
+            if pl_module.output_type == "Implicit":
                 voxels_out = (
                     (
                         out.view(num_figs, voxel_size, voxel_size, voxel_size)
-                        > args.threshold
+                        > self.threshold
                     )
                     .detach()
                     .cpu()
                     .numpy()
                 )
-                visualization.multiple_plot_voxel(
-                    voxels_out, save_loc=save_loc + "{}_text_query.png".format(text_in)
-                )
-            elif args.output_type == "Pointcloud":
+                fig = multiple_plot_voxel(voxels_out)
+            elif pl_module.output_type == "Pointcloud":
                 pred = out.detach().cpu().numpy()
-                visualization.multiple_plot(
-                    pred, save_loc=save_loc + "{}_text_query.png".format(text_in)
-                )
+                fig = multiple_plot(pred)
 
-    latent_flow_model.train()
-
-
-def train_one_epoch(
-    args: Any,
-    latent_flow_model: latent_flows.FlowSequential,
-    train_dataloader: DataLoader,
-    optimizer: torch.optim.Adam,
-    epoch: int,
-    loss_meter: helper.AverageMeter,
-    writer: SummaryWriter
-):
-    latent_flow_model.train()
-    iteration = 0
-
-    with torch.profiler.profile(
-        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler(
-            osp.join(args.experiment_dir, "tb_logs")
-        ),
-        record_shapes=True,
-        profile_memory=True,
-        with_stack=True,
-    ) as prof:
-        for data in train_dataloader:
-            iteration = iteration + 1
-            optimizer.zero_grad()
-
-            # Load appropriate input data from the training set
-            train_embs, train_cond_embs = data
-            train_embs = train_embs.type(torch.FloatTensor).to(args.device)
-            train_cond_embs = train_cond_embs.type(torch.FloatTensor).to(args.device)
-
-            # Add noise to improve robustness
-            if args.noise == "add":
-                train_embs = train_embs + 0.1 * torch.randn(
-                    train_embs.size(0), args.emb_dims
-                ).to(args.device)
-
-            # Compute loss (prediction occurs within this method)
-            loss_log_prob = -latent_flow_model.log_prob(
-                train_embs, train_cond_embs
-            ).mean()
-            loss = loss_log_prob
-
-            # Compute loss gradient
-            loss.backward()
-
-            # Perform a single optimizer step, updating model parameters according
-            # to gradient
-            optimizer.step()
-
-            # Track metrics
-            writer.add_scalar("Loss/train", loss, epoch * args.num_iterations + iteration)
-            prof.step()
-            loss_meter.update(loss)
-
-            if iteration % args.print_every == 0:
-                logging.info(
-                    "[Train] Epoch %s, Iteration %s loss: %s ",
-                    epoch,
-                    iteration,
-                    loss_meter.avg
-                )
-
-
-def val_one_epoch(args, latent_flow_model, val_dataloader, epoch, writer):
-    loss_array = []
-    latent_flow_model.eval()
-    with torch.no_grad():
-        for data in val_dataloader:
-            train_embs, train_cond_embs = data
-            train_embs = train_embs.type(torch.FloatTensor).to(args.device)
-            train_cond_embs = train_cond_embs.type(torch.FloatTensor).to(args.device)
-            loss = -latent_flow_model.log_prob(
-                train_embs, train_cond_embs
-            ).mean()
-
-            loss_array.append(loss.item())
-    mean_loss = np.mean(np.asarray(loss_array))
-    writer.add_scalar("Loss/val", mean_loss, epoch * args.num_iterations)
-    logging.info(
-        "[VAL] Epoch %s Train loss %s",
-        epoch,
-        mean_loss,
-    )
-    return mean_loss
+            buf = io.BytesIO()
+            fig.savefig(buf)
+            buf.seek(0)
+            im = Image.open(buf)
+            trainer.logger.experiment.log({"samples": [wandb.Image(im)]})
+            plt.close(fig)
 
 
 def get_local_parser(mode="args"):
-    parser = parsing(mode="parser")
+    parser = argparse.ArgumentParser()
     parser.add_argument(
         "--num_blocks", type=int, default=5, help="Num of blocks for prior"
     )
@@ -343,7 +287,7 @@ def get_local_parser(mode="args"):
         "--flow_type",
         type=str,
         default="realnvp_half",
-        help="flow type: mf, glow, realnvp ",
+        choices=["realnvp", "realnvp_half"],
     )
     parser.add_argument(
         "--num_hidden",
@@ -352,7 +296,15 @@ def get_local_parser(mode="args"):
         help="Number of parameter for flow model",
     )
     parser.add_argument(
-        "--latent_load_checkpoint",
+        "--emb_dims", type=int, default=128, help="Dimension of embedding"
+    )
+    parser.add_argument(
+        "--autoencoder_checkpoint",
+        type=str,
+        help="W&B checkpoint name from which to load the Autoencoder",
+    )
+    parser.add_argument(
+        "--checkpoint",
         type=str,
         default=None,
         help="Checkpoint to load latent flow model",
@@ -390,45 +342,18 @@ def get_local_parser(mode="args"):
 
 def main():
     args = get_local_parser()
-    exp_name = experiment_name(args)
-    exp_name_2 = experiment_name2(args)
 
     manual_seed = args.seed_nf
     helper.set_seed(manual_seed)
 
-    # Create directories for checkpoints and logging
-    args.experiment_dir = osp.join("exps", exp_name, exp_name_2)
-    args.experiment_dir_base = osp.join("exps", exp_name)
-    args.checkpoint_dir = osp.join(args.experiment_dir, "checkpoints")
-    args.checkpoint_dir_base = osp.join(args.experiment_dir_base, "checkpoints")
-    args.vis_dir = osp.join(args.experiment_dir, "vis_dir") + "/"
-    args.generate_dir = osp.join(args.experiment_dir, "generate_dir") + "/"
+    torch.set_float32_matmul_precision("medium")
 
-    log_filename = osp.join(args.experiment_dir, "log.txt")
-
-    helper.create_dir(args.checkpoint_dir)
-    helper.create_dir(args.vis_dir)
-    helper.create_dir(args.generate_dir)
-
-    if args.train_mode == "test":
-        test_log_filename = osp.join(args.experiment_dir, "test_log.txt")
-        helper.setup_logging(test_log_filename, args.log_level, "w")
-        args.query_generate_dir = (
-            osp.join(args.experiment_dir, "query_generate_dir") + "/"
-        )
-        helper.create_dir(args.query_generate_dir)
-        args.vis_gen_dir = osp.join(args.experiment_dir, "vis_gen_dir") + "/"
-        helper.create_dir(args.vis_gen_dir)
-    else:
-        helper.setup_logging(log_filename, args.log_level, "w")
-
-    logging.info("Experiment name: %s and Experiment name 2 %s", exp_name, exp_name_2)
-    logging.info("%s", args)
-
-    device, gpu_array = helper.get_device(args)
-    args.device = device
-
-    writer = SummaryWriter(log_dir=osp.join(args.experiment_dir, "tb_logs"))
+    wandb_logger = WandbLogger(
+        project="clip_forge",
+        name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-autoencoder"),
+        log_model="all",
+    )
+    wandb_logger.experiment.config.update(args)
 
     # Loading datasets
     train_dataloader, total_shapes = get_dataloader(args, split="train")
@@ -442,23 +367,39 @@ def main():
     args, clip_model = get_clip_model(args)
 
     # Load Autoencoder from checkpoint generated by train_autoencoder.py
-    net = Autoencoder(args).to(args.device)
-    checkpoint = torch.load(
-        args.checkpoint_dir_base + "/" + args.checkpoint + ".pt",
-        map_location=args.device,
-    )
-    net.load_state_dict(checkpoint["model"])
-    net.eval()
+    # TODO: Modularize this and share code with train_autoencoder.py
+    checkpoint = wandb_logger.use_artifact(args.autoencoder_checkpoint, "model")
+    checkpoint_dir = checkpoint.download()
+    checkpoint_path = os.path.join(checkpoint_dir, "model.ckpt")
+    print(f"Loading specified W&B autoencoder Checkpoint from {checkpoint_path}.")
+    net = Autoencoder.load_from_checkpoint(checkpoint_path)
 
     # Load latent flow network
-    latent_flow_network = latent_flows.get_generator(
-        args.emb_dims,
-        args.cond_emb_dim,
-        device,
-        flow_type=args.flow_type,
-        num_blocks=args.num_blocks,
-        num_hidden=args.num_hidden,
-    )
+    if args.checkpoint is not None:
+        # If a checkpoint name is explicitly provided, load that checkpoint
+        checkpoint = wandb_logger.use_artifact(args.checkpoint, "model")
+        checkpoint_dir = checkpoint.download()
+        checkpoint_path = os.path.join(checkpoint_dir, "model.ckpt")
+        print(f"Loading specified W&B latent flows Checkpoint from {checkpoint_path}.")
+        latent_flow_network = LatentFlows.load_from_checkpoint(checkpoint_path)
+    elif os.path.exists(os.path.join("/opt/ml/checkpoints", "last.ckpt")):
+        # Restore any checkpoint present in /opt/ml/checkpoints, as this
+        # represents a checkpoint that was pre-loaded from SageMaker. We need to
+        # do this in order to be able to use Spot training, as we need this
+        # script to be able to automatically recover after being interrupted.
+        checkpoint_path = os.path.join("/opt/ml/checkpoints", "last.ckpt")
+        print(
+            f"Auto-loading existing SageMaker checkpoint from {checkpoint_path}. Are we resuming after an interruption?"
+        )
+        latent_flow_network = LatentFlows.load_from_checkpoint(checkpoint_path)
+    else:
+        latent_flow_network = LatentFlows(
+            args.emb_dims,
+            args.cond_emb_dim,
+            flow_type=args.flow_type,
+            num_blocks=args.num_blocks,
+            num_hidden=args.num_hidden,
+        )
 
     # Generate TensorDatasets for Autoencoded shape embeddings and CLIP image embeddings
     logging.info("Getting train shape embeddings and condition embedding")
@@ -484,61 +425,31 @@ def main():
         num_workers=args.num_workers,
         drop_last=False,
     )
+    checkpoint_callback = ModelCheckpoint(
+        "/opt/ml/checkpoints",
+        monitor="Loss/val",
+        mode="max",
+        every_n_epochs=5,
+        save_last=True,
+    )
+    early_stop_callback = EarlyStopping(monitor="Loss/val", mode="max")
+    sampling_callback = LogPredictionSamplesCallback(
+        args.text_query, args.threshold, args.output_type, net, clip_model
+    )
+    trainer = pl.Trainer(
+        max_epochs=args.epochs,
+        logger=wandb_logger,
+        callbacks=[checkpoint_callback, early_stop_callback, sampling_callback],
+        accelerator="gpu",
+        devices=args.gpus,
+        precision=16,
+    )
 
-    if args.train_mode == "test":
-        pass
-    else:
-        optimizer = torch.optim.Adam(latent_flow_network.parameters(), lr=0.00003)
-        start_epoch = 0
-
-        # If a checkpoint is provided, intitialize network, optimizer, and
-        # schedule with checkpoint configuration.
-        if args.latent_load_checkpoint is not None:
-            checkpoint_dir = (
-                f"{args.new_checkpoint_dir}/{args.latent_load_checkpoint}.pt"
-            )
-            checkpoint = torch.load(checkpoint_dir, map_location=args.device)
-            latent_flow_network.load_state_dict(checkpoint["model"])
-            start_epoch = checkpoint["current_epoch"]
-
-        best_loss = np.inf
-        for epoch in range(start_epoch, args.epochs):
-            loss_meter = helper.AverageMeter()
-
-            if (epoch + 1) % 5 == 0:
-                if args.text_query is not None:
-                    generate_on_query_text(args, clip_model, net, latent_flow_network)
-
-            train_one_epoch(
-                args, latent_flow_network, train_dataloader_new, optimizer, epoch, loss_meter, writer
-            )
-            val_loss = val_one_epoch(
-                args, latent_flow_network, val_dataloader_new, epoch, writer
-            )
-
-            filename = f"{args.checkpoint_dir}/last.pt"
-            logging.info("Saving Model... %s", filename)
-            torch.save(
-                {
-                    "model": latent_flow_network.state_dict(),
-                    "args": args,
-                    "current_epoch": epoch,
-                },
-                filename,
-            )
-
-            if best_loss > val_loss:
-                best_loss = val_loss
-                filename = f"{args.checkpoint_dir}/best.pt"
-                logging.info("Saving Model... %s", filename)
-                torch.save(
-                    {
-                        "model": latent_flow_network.state_dict(),
-                        "args": args,
-                        "current_epoch": epoch,
-                    },
-                    filename,
-                )
+    trainer.fit(
+        latent_flow_network,
+        train_dataloaders=train_dataloader_new,
+        val_dataloaders=val_dataloader_new,
+    )
 
 
 if __name__ == "__main__":

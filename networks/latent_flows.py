@@ -4,6 +4,7 @@ import math
 
 import torch
 import torch.nn as nn
+import pytorch_lightning as pl
 
 EPS = 1e-6
 
@@ -157,8 +158,8 @@ class FlowSequential(nn.Sequential):
 
         return inputs, logdets
 
-    def log_prob(self, inputs, cond_inputs=None):
-        u, log_jacob = self(inputs, cond_inputs)
+    def log_prob(self, pred):
+        u, log_jacob = pred
         log_probs = (-0.5 * u.pow(2) - 0.5 * math.log(2 * math.pi + EPS)).sum(
             -1, keepdim=True
         )
@@ -167,58 +168,109 @@ class FlowSequential(nn.Sequential):
     def sample(self, num_samples=None, noise=None, cond_inputs=None):
         if noise is None:
             noise = torch.Tensor(num_samples, self.num_inputs).normal_()
-        device = next(self.parameters()).device
-        noise = noise.to(device)
         if cond_inputs is not None:
-            cond_inputs = cond_inputs.to(device)
+            cond_inputs = cond_inputs
         samples = self.forward(noise, cond_inputs, mode="inverse")[0]
         return samples
 
 
-def get_generator(
-    num_inputs,
-    num_cond_inputs,
-    device,
-    flow_type="realnvp",
-    num_blocks=5,
-    num_hidden=1024,
-):
-    modules = []
-    if flow_type == "realnvp":  ### Checkered Masking
-        mask = torch.arange(0, num_inputs) % 2
-        mask = mask.to(device).float()
+class LatentFlows(pl.LightningModule):
+    def __init__(
+        self,
+        num_inputs: int,
+        num_cond_inputs: int,
+        lr=0.00003,
+        noise="add",
+        flow_type="realnvp",
+        num_blocks=5,
+        num_hidden=1024,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
 
-        for _ in range(num_blocks):
-            modules += [
-                CouplingLayer(
-                    num_inputs,
-                    num_hidden,
-                    mask,
-                    num_cond_inputs,
-                    s_act="tanh",
-                    t_act="relu",
-                ),
-                BatchNormFlow(num_inputs),
-            ]
-            mask = 1 - mask
-        generator = FlowSequential(*modules).to(device)
+        self.num_inputs = num_inputs
+        self.lr = lr
+        self.noise = noise
 
-    elif flow_type == "realnvp_half":  # Dimension Masking
-        mask = (torch.arange(0, num_inputs) < (num_inputs / 2)).type(torch.uint8)
-        mask = mask.to(device).float()
-        for _ in range(num_blocks):
-            modules += [
-                CouplingLayer(
-                    num_inputs,
-                    num_hidden,
-                    mask,
-                    num_cond_inputs,
-                    s_act="tanh",
-                    t_act="relu",
-                ),
-                BatchNormFlow(num_inputs),
-            ]
-            mask = 1 - mask
-        generator = FlowSequential(*modules).to(device)
+        modules = []
+        if flow_type == "realnvp":  ### Checkered Masking
+            mask = torch.arange(0, num_inputs) % 2
+            mask = mask.float()
 
-    return generator
+            for _ in range(num_blocks):
+                modules += [
+                    CouplingLayer(
+                        num_inputs,
+                        num_hidden,
+                        mask,
+                        num_cond_inputs,
+                        s_act="tanh",
+                        t_act="relu",
+                    ),
+                    BatchNormFlow(num_inputs),
+                ]
+                mask = 1 - mask
+            self.generator = FlowSequential(*modules)
+
+        elif flow_type == "realnvp_half":  # Dimension Masking
+            mask = (torch.arange(0, num_inputs) < (num_inputs / 2)).type(torch.uint8)
+            mask = mask.float()
+            for _ in range(num_blocks):
+                modules += [
+                    CouplingLayer(
+                        num_inputs,
+                        num_hidden,
+                        mask,
+                        num_cond_inputs,
+                        s_act="tanh",
+                        t_act="relu",
+                    ),
+                    BatchNormFlow(num_inputs),
+                ]
+                mask = 1 - mask
+            self.generator = FlowSequential(*modules)
+
+    def forward(self, inputs, cond_inputs=None, mode="direct", logdets=None):
+        return self.generator.forward(inputs, cond_inputs, mode, logdets)
+
+    def log_prob(self, pred):
+        return self.generator.log_prob(pred)
+
+    def sample(self, num_samples=None, noise=None, cond_inputs=None):
+        return self.generator.sample(num_samples, noise, cond_inputs)
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
+
+    def training_step(self, data, batch_idx):
+        # Load appropriate input data from the training set
+        train_embs, train_cond_embs = data
+
+        # Add noise to improve robustness
+        if self.noise == "add":
+            train_embs = train_embs + 0.1 * torch.randn(
+                train_embs.size(0), self.num_inputs
+            )
+
+        # Run prediction
+        pred = self.forward(train_embs, train_cond_embs)
+
+        # Compute loss
+        loss = -self.log_prob(pred).mean()
+
+        self.log("Loss/train", loss)
+
+        return loss
+
+    def validation_step(self, data, data_idx):
+        train_embs, train_cond_embs = data
+
+        # Run prediction
+        pred = self.forward(train_embs, train_cond_embs)
+
+        # Compute loss
+        loss = -self.log_prob(pred).mean()
+
+        self.log("Loss/val", loss)
+
+        return pred

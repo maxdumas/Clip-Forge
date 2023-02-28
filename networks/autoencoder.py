@@ -11,10 +11,6 @@ from utils.visualization import make_3d_grid
 
 EPS = 1e-6
 
-####################################################################################################
-####################################################################################################
-
-
 # borrowed from https://github.com/ThibaultGROUEIX/AtlasNet
 def dist_chamfer(a: Tensor, b: Tensor) -> tuple[Tensor, Tensor]:
     x, y = a, b
@@ -128,10 +124,6 @@ class Foldingnet_decoder(nn.Module):
         return x.contiguous().transpose(2, 1).contiguous()
 
 
-####################################################################################################
-####################################################################################################
-
-
 class VoxelEncoderBN(nn.Module):
     def __init__(self, dim=3, c_dim=128, last_feature_transform=None):
         super().__init__()
@@ -215,10 +207,6 @@ class Occ_Simple_Decoder(nn.Module):
             out = torch.sigmoid(out)
 
         return out
-
-
-####################################################################################################
-####################################################################################################
 
 
 def compute_iou(occ1: Tensor, occ2: Tensor):
