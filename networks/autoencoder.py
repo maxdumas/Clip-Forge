@@ -146,9 +146,7 @@ class VoxelEncoderBN(nn.Module):
 
     def forward(self, x: Tensor):
         batch_size = x.shape[0]
-        print("Before unsqueezing", x.shape)
         x = x.unsqueeze(1)
-        print("After unsqueezing", x.shape)
         net = self.conv_in(x)
         net = self.conv_0(self.actvn(self.conv0_bn(net)))
         net = self.conv_1(self.actvn(self.conv1_bn(net)))

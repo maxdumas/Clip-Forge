@@ -179,6 +179,8 @@ class LatentFlows(pl.LightningModule):
         self,
         num_inputs: int,
         num_cond_inputs: int,
+        input_type: str,
+        output_type: str,
         lr=0.00003,
         noise="add",
         flow_type="realnvp",
@@ -191,6 +193,8 @@ class LatentFlows(pl.LightningModule):
         self.num_inputs = num_inputs
         self.lr = lr
         self.noise = noise
+        self.input_type = input_type
+        self.output_type = output_type
 
         modules = []
         if flow_type == "realnvp":  ### Checkered Masking
@@ -244,7 +248,7 @@ class LatentFlows(pl.LightningModule):
 
     def training_step(self, data, batch_idx):
         # Load appropriate input data from the training set
-        train_embs, train_cond_embs = data
+        train_embs, train_cond_embs = data[0]
 
         # Add noise to improve robustness
         if self.noise == "add":
@@ -263,7 +267,9 @@ class LatentFlows(pl.LightningModule):
         return loss
 
     def validation_step(self, data, data_idx):
-        train_embs, train_cond_embs = data
+        assert len(data) == 1, "More than one datum came to validation step."
+        # TODO: Why is this wrapped in an array with one element?
+        train_embs, train_cond_embs = data[0]
 
         # Run prediction
         pred = self.forward(train_embs, train_cond_embs)

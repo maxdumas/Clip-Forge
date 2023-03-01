@@ -64,6 +64,7 @@ class Embed:
         self.clip_model = clip_model
         self.n_embeddings_per_datum = n_embeddings_per_datum
 
+    @torch.no_grad()
     def embed(self, datum):
         # TODO: The issue here is that the incoming data has not yet been loaded into a Tensor. We need to convert it to a Tesnor
         image = datum["images"]
@@ -73,17 +74,19 @@ class Embed:
         elif self.input_type == "Pointcloud":
             data_input = datum["pc_org"].transpose(-1, 1)
 
-        shape_emb = self.autoencoder.encoder(torch.from_numpy(data_input))
+        shape_emb = self.autoencoder.encoder(data_input)
 
         image_features = self.clip_model.encode_image(image)
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
         return shape_emb, image_features
 
+    @torch.no_grad()
     def __call__(self, batch):
-        batch = [self.embed(datum) for datum in batch for _ in range(self.n_embeddings_per_datum)]
+        batch = torch.utils.data.dataloader.default_collate(batch)
+        batch = [self.embed(batch) for _ in range(self.n_embeddings_per_datum)]
         batch = [b for b in batch if b is not None]
-        return torch.utils.data.dataloader.default_collate(batch)
+        return batch
 
 class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
     def __init__(
@@ -368,8 +371,6 @@ def main():
     print(f"Loading specified W&B autoencoder Checkpoint from {checkpoint_path}.")
     net = Autoencoder.load_from_checkpoint(checkpoint_path)
 
-    embedder = Embed(args.input_type, net, clip_model, args.num_views)
-
     # Loading datasets
     datamodule = LatentFlowsShapeNetDataModule(
         args.dataset_name,
@@ -379,7 +380,7 @@ def main():
         args.test_batch_size,
         args.num_points,
         n_px,
-        collate_fn=embedder
+        collate_fn=Embed(args.input_type, net, clip_model, args.num_views)
     )
 
     # Load latent flow network
@@ -408,6 +409,8 @@ def main():
             flow_type=args.flow_type,
             num_blocks=args.num_blocks,
             num_hidden=args.num_hidden,
+            input_type=args.input_type,
+            output_type=args.output_type,
         )
 
     checkpoint_callback = ModelCheckpoint(
