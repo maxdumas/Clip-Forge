@@ -10,7 +10,7 @@ from clip.model import CLIP
 from PIL import Image
 from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
-from torch.utils.data import DataLoader2
+from torch.utils.data import DataLoader
 from torchdata.datapipes.iter import IterableWrapper
 
 import wandb
@@ -38,12 +38,9 @@ def get_clip_model(clip_model_type: str, device="cuda") -> tuple[CLIP, int, int]
     return clip_model, input_resolution, cond_emb_dim
 
 
-def collate_fn(batch):
-    batch = list(filter(lambda x: x is not None, batch))
-    return torch.utils.data.dataloader.default_collate(batch)
 
 
-class Embed(object):
+class Embed:
     """
     Given an Autoencoder and CLIP model, generates 3D shape embeddings using the
     Autoencoder and 2D image rendering embeddings using CLIP for every data
@@ -67,28 +64,26 @@ class Embed(object):
         self.clip_model = clip_model
         self.n_embeddings_per_datum = n_embeddings_per_datum
 
-    def embed(self, data):
+    def embed(self, datum):
         # TODO: The issue here is that the incoming data has not yet been loaded into a Tensor. We need to convert it to a Tesnor
-        image = data["images"]
+        image = datum["images"]
 
         if self.input_type == "Voxel":
-            data_input = data["voxels"]
+            data_input = datum["voxels"]
         elif self.input_type == "Pointcloud":
-            data_input = data["pc_org"].transpose(-1, 1)
+            data_input = datum["pc_org"].transpose(-1, 1)
 
-        print(data_input.shape)
-        print(data_input.shape[0])
-
-        shape_emb = self.autoencoder.encoder(data_input)
+        shape_emb = self.autoencoder.encoder(torch.from_numpy(data_input))
 
         image_features = self.clip_model.encode_image(image)
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
         return shape_emb, image_features
 
-    def __call__(self, data):
-        return [self.embed(data) for _ in range(self.n_embeddings_per_datum)]
-
+    def __call__(self, batch):
+        batch = [self.embed(datum) for datum in batch for _ in range(self.n_embeddings_per_datum)]
+        batch = [b for b in batch if b is not None]
+        return torch.utils.data.dataloader.default_collate(batch)
 
 class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
     def __init__(
@@ -100,7 +95,7 @@ class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
         test_batch_size: int,
         num_points: int,
         n_px: int,
-        embedder: Embed,
+        collate_fn
     ) -> None:
         super().__init__()
 
@@ -114,7 +109,7 @@ class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
         self.categories = categories
         self.num_points = num_points
         self.n_px = n_px
-        self.embedder = embedder
+        self.collate_fn = collate_fn
 
     def setup(self, stage: str) -> None:
         fields = {
@@ -127,62 +122,56 @@ class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
         }
 
         if stage == "fit":
-            self.train_dataset = IterableWrapper(
-                shapenet_dataset.Shapes3dDataset(
+            self.train_dataset = shapenet_dataset.Shapes3dDataset(
                     self.dataset_path,
                     fields,
                     split="train",
                     categories=self.categories,
                     num_points=self.num_points,
                 )
-            ).flatmap(self.embedder)
-            self.val_dataset = IterableWrapper(
-                shapenet_dataset.Shapes3dDataset(
+            self.val_dataset = shapenet_dataset.Shapes3dDataset(
                     self.dataset_path,
                     fields,
                     split="val",
                     categories=self.categories,
                     num_points=self.num_points,
                 )
-            ).flatmap(self.embedder)
         elif stage == "test":
-            self.test_dataset = IterableWrapper(
-                shapenet_dataset.Shapes3dDataset(
+            self.test_dataset = shapenet_dataset.Shapes3dDataset(
                     self.dataset_path,
                     fields,
                     split="test",
                     categories=self.categories,
                     num_points=self.num_points,
                 )
-            ).flatmap(self.embedder)
 
-    def train_dataloader(self) -> DataLoader2:
-        return DataLoader2(
+    def train_dataloader(self) -> DataLoader:
+        return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
-            collate_fn=collate_fn,
+            collate_fn=self.collate_fn,
             num_workers=os.cpu_count() or 0,
         )
 
-    def val_dataloader(self) -> DataLoader2:
-        return DataLoader2(
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(
             self.val_dataset,
             batch_size=self.test_batch_size,
             shuffle=True,
             drop_last=False,
-            collate_fn=collate_fn,
+            collate_fn=self.collate_fn,
             num_workers=os.cpu_count() or 0,
         )
 
-    def test_dataloader(self) -> DataLoader2:
-        return DataLoader2(
+    def test_dataloader(self) -> DataLoader:
+        return DataLoader(
             self.test_dataset,
             batch_size=self.test_batch_size,
             shuffle=True,
             drop_last=False,
-            collate_fn=collate_fn,
+            collate_fn=self.collate_fn,
             num_workers=os.cpu_count() or 0,
         )
 
@@ -379,6 +368,8 @@ def main():
     print(f"Loading specified W&B autoencoder Checkpoint from {checkpoint_path}.")
     net = Autoencoder.load_from_checkpoint(checkpoint_path)
 
+    embedder = Embed(args.input_type, net, clip_model, args.num_views)
+
     # Loading datasets
     datamodule = LatentFlowsShapeNetDataModule(
         args.dataset_name,
@@ -388,7 +379,7 @@ def main():
         args.test_batch_size,
         args.num_points,
         n_px,
-        Embed(args.input_type, net, clip_model, args.num_views),
+        collate_fn=embedder
     )
 
     # Load latent flow network
