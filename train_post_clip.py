@@ -10,11 +10,15 @@ from clip.model import CLIP
 from PIL import Image
 from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
-from torch.utils.data import DataLoader
-from torchdata.datapipes.iter import IterableWrapper
 
 import wandb
-from dataset import shapenet_dataset
+from dataset.shapenet_dataset import (
+    ImagesField,
+    PointsField,
+    VoxelsField,
+    PointCloudField,
+)
+from dataset.datamodule import ShapeNetDataModule
 from networks.autoencoder import Autoencoder
 from networks.latent_flows import LatentFlows
 from utils.helper import set_seed
@@ -36,8 +40,6 @@ def get_clip_model(clip_model_type: str, device="cuda") -> tuple[CLIP, int, int]
 
     input_resolution = clip_model.visual.input_resolution
     return clip_model, input_resolution, cond_emb_dim
-
-
 
 
 class Embed:
@@ -87,96 +89,6 @@ class Embed:
         batch = [self.embed(batch) for _ in range(self.n_embeddings_per_datum)]
         batch = [b for b in batch if b is not None]
         return batch
-
-class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
-    def __init__(
-        self,
-        dataset_name: str,
-        dataset_path: str,
-        categories: list[str],
-        batch_size: int,
-        test_batch_size: int,
-        num_points: int,
-        n_px: int,
-        collate_fn
-    ) -> None:
-        super().__init__()
-
-        assert (
-            dataset_name == "Shapenet"
-        ), "Only the ShapeNet dataset is currently supported."
-
-        self.dataset_path = dataset_path
-        self.batch_size = batch_size
-        self.test_batch_size = test_batch_size
-        self.categories = categories
-        self.num_points = num_points
-        self.n_px = n_px
-        self.collate_fn = collate_fn
-
-    def setup(self, stage: str) -> None:
-        fields = {
-            "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
-            "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
-            "voxels": shapenet_dataset.VoxelsField("model.binvox"),
-            "images": shapenet_dataset.ImagesField(
-                "img_choy2016", random_view=stage == "fit", n_px=self.n_px
-            ),
-        }
-
-        if stage == "fit":
-            self.train_dataset = shapenet_dataset.Shapes3dDataset(
-                    self.dataset_path,
-                    fields,
-                    split="train",
-                    categories=self.categories,
-                    num_points=self.num_points,
-                )
-            self.val_dataset = shapenet_dataset.Shapes3dDataset(
-                    self.dataset_path,
-                    fields,
-                    split="val",
-                    categories=self.categories,
-                    num_points=self.num_points,
-                )
-        elif stage == "test":
-            self.test_dataset = shapenet_dataset.Shapes3dDataset(
-                    self.dataset_path,
-                    fields,
-                    split="test",
-                    categories=self.categories,
-                    num_points=self.num_points,
-                )
-
-    def train_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            drop_last=True,
-            collate_fn=self.collate_fn,
-            num_workers=os.cpu_count() or 0,
-        )
-
-    def val_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.test_batch_size,
-            shuffle=True,
-            drop_last=False,
-            collate_fn=self.collate_fn,
-            num_workers=os.cpu_count() or 0,
-        )
-
-    def test_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.test_dataset,
-            batch_size=self.test_batch_size,
-            shuffle=True,
-            drop_last=False,
-            collate_fn=self.collate_fn,
-            num_workers=os.cpu_count() or 0,
-        )
 
 
 class LogPredictionSamplesCallback(Callback):
@@ -372,15 +284,20 @@ def main():
     net = Autoencoder.load_from_checkpoint(checkpoint_path)
 
     # Loading datasets
-    datamodule = LatentFlowsShapeNetDataModule(
-        args.dataset_name,
-        args.dataset_path,
-        args.categories,
-        args.batch_size,
-        args.test_batch_size,
-        args.num_points,
-        n_px,
-        collate_fn=Embed(args.input_type, net, clip_model, args.num_views)
+    datamodule = ShapeNetDataModule(
+        dataset_name=args.dataset_name,
+        dataset_path=args.dataset_path,
+        fields={
+            "pointcloud": PointCloudField("pointcloud.npz"),
+            "points": PointsField("points.npz", unpackbits=True),
+            "voxels": VoxelsField("model.binvox"),
+            "images": ImagesField("img_choy2016", n_px=n_px),
+        },
+        categories=args.categories,
+        batch_size=args.batch_size,
+        test_batch_size=args.test_batch_size,
+        num_points=args.num_points,
+        collate_fn=Embed(args.input_type, net, clip_model, args.num_views),
     )
 
     # Load latent flow network

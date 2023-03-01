@@ -1,7 +1,7 @@
 import argparse
 import io
 import os
-from typing import Any, Optional
+from typing import Any
 
 import matplotlib.pyplot as plt
 import pytorch_lightning as pl
@@ -9,109 +9,13 @@ import torch
 from PIL import Image
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers.wandb import WandbLogger
-from torch.utils.data import DataLoader
 
 import wandb
 from dataset import shapenet_dataset
+from dataset.datamodule import ShapeNetDataModule
 from networks.autoencoder import Autoencoder
 from utils.helper import set_seed
 from utils.visualization import multiple_plot_voxel, plot_real_pred
-
-
-class AutoencoderShapeNetDataModule(pl.LightningDataModule):
-    def __init__(
-        self,
-        dataset_name: str,
-        dataset_path: str,
-        categories: Optional[list[str]],
-        batch_size: int = 32,
-        test_batch_size: int = 32,
-        num_points: int = 2025,
-        num_sdf_points: int = 5000,
-        test_num_sdf_points: int = 5000,
-        sampling_type: Optional[str] = None,
-    ):
-        super().__init__()
-
-        assert (
-            dataset_name == "Shapenet"
-        ), "Only the ShapeNet dataset is currently supported."
-
-        self.dataset_path = dataset_path
-        self.batch_size = batch_size
-        self.test_batch_size = test_batch_size
-        self.categories = categories
-        self.num_points = num_points
-        self.num_sdf_points = num_sdf_points
-        self.test_num_sdf_points = test_num_sdf_points
-        self.sampling_type = sampling_type
-
-        self.fields = {
-            "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
-            "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
-            "voxels": shapenet_dataset.VoxelsField("model.binvox"),
-        }
-
-    def setup(self, stage: str) -> None:
-        if stage == "fit":
-            self.train_dataset = shapenet_dataset.Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="train",
-                categories=self.categories,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.num_sdf_points,
-                sampling_type=self.sampling_type,
-            )
-            self.val_dataset = shapenet_dataset.Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="val",
-                categories=self.categories,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.test_num_sdf_points,
-                sampling_type=self.sampling_type,
-            )
-        elif stage == "test":
-            self.test_dataset = shapenet_dataset.Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="test",
-                categories=self.categories,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.test_num_sdf_points,
-                sampling_type=self.sampling_type,
-            )
-
-    def train_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            drop_last=True,
-            num_workers=os.cpu_count() or 0,
-        )
-
-    def val_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.test_batch_size,
-            shuffle=False,
-            drop_last=False,
-            num_workers=os.cpu_count() or 0,
-        )
-
-    def test_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.test_dataset,
-            batch_size=self.test_batch_size,
-            shuffle=False,
-            drop_last=False,
-            num_workers=os.cpu_count() or 0,
-        )
 
 
 class LogPredictionSamplesCallback(Callback):
@@ -158,7 +62,7 @@ class LogPredictionSamplesCallback(Callback):
         plt.close(fig)
 
 
-def parsing(mode="args") -> Any:
+def parsing() -> Any:
     parser = argparse.ArgumentParser()
 
     ### Sub Network details
@@ -220,7 +124,10 @@ def parsing(mode="args") -> Any:
     parser.add_argument("--seed", type=int, default=1, help="Seed")
     parser.add_argument("--epochs", type=int, default=300, help="Total epochs")
     parser.add_argument(
-        "--checkpoint", type=str, default=None, help="W&B checkpoint name from which to load the Autoencoder"
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="W&B checkpoint name from which to load the Autoencoder",
     )
     parser.add_argument(
         "--gpus", nargs="+", default=os.environ.get("SM_NUM_GPUS", "0"), help="GPU list"
@@ -276,23 +183,30 @@ def main():
         # do this in order to be able to use Spot training, as we need this
         # script to be able to automatically recover after being interrupted.
         checkpoint_path = os.path.join("/opt/ml/checkpoints", "last.ckpt")
-        print(f"Auto-loading existing SageMaker checkpoint from {checkpoint_path}. Are we resuming after an interruption?")
+        print(
+            f"Auto-loading existing SageMaker checkpoint from {checkpoint_path}. Are we resuming after an interruption?"
+        )
         net = Autoencoder.load_from_checkpoint(checkpoint_path)
     else:
         net = Autoencoder(args)
 
     wandb_logger.watch(net)
 
-    datamodule = AutoencoderShapeNetDataModule(
-        args.dataset_name,
-        args.dataset_path,
-        args.categories,
-        args.batch_size,
-        args.test_batch_size,
-        args.num_points,
-        args.num_sdf_points,
-        args.test_num_sdf_points,
-        args.sampling_type,
+    datamodule = ShapeNetDataModule(
+        dataset_name=args.dataset_name,
+        dataset_path=args.dataset_path,
+        fields={
+            "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
+            "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
+            "voxels": shapenet_dataset.VoxelsField("model.binvox"),
+        },
+        categories=args.categories,
+        batch_size=args.batch_size,
+        test_batch_size=args.test_batch_size,
+        num_points=args.num_points,
+        num_sdf_points=args.num_sdf_points,
+        test_num_sdf_points=args.test_num_sdf_points,
+        sampling_type=args.sampling_type,
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -317,6 +231,7 @@ def main():
         trainer.test(net, datamodule=datamodule)
     else:  # train mode
         trainer.fit(net, datamodule=datamodule)
+
 
 if __name__ == "__main__":
     main()

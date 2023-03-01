@@ -92,7 +92,7 @@ def volume_to_point_cloud(vol):
 class Field(object):
     """Data fields class."""
 
-    def load(self, data_path, idx, category):
+    def load(self, split: str, data_path: str, idx: int, category: str):
         """Loads a data point.
 
         Args:
@@ -123,7 +123,7 @@ class VoxelsField(Field):
         self.file_name = file_name
         self.transform = transform
 
-    def load(self, model_path, idx, category):
+    def load(self, split, model_path, idx, category):
         """Loads the data point.
         Args:
             model_path (str): path to model
@@ -162,7 +162,6 @@ class ImagesField(Field):
         folder_name (str): folder name
         transform (list): list of transformations applied to loaded images
         extension (str): image extension
-        random_view (bool): whether a random view should be used
         with_camera (bool): whether camera data should be provided
     """
 
@@ -171,16 +170,13 @@ class ImagesField(Field):
         folder_name,
         transform=None,
         extension="jpg",
-        random_view=True,
         with_camera=False,
         n_px=224,
     ):
         self.folder_name = folder_name
         # self.transform = transform
         self.extension = extension
-        self.random_view = random_view
         self.with_camera = with_camera
-        n_px = n_px
 
         self.transform = Compose(
             [
@@ -195,7 +191,7 @@ class ImagesField(Field):
             ]
         )
 
-    def load(self, model_path, idx, category):
+    def load(self, split, model_path, idx, category):
         """Loads the data point.
 
         Args:
@@ -205,14 +201,15 @@ class ImagesField(Field):
         """
         folder = os.path.join(model_path, self.folder_name)
         files = glob.glob(os.path.join(folder, "*.%s" % self.extension))
-        if self.random_view:
+        if split == "train":
+            # Generate random views when in training
             idx_img = random.randint(0, len(files) - 1)
         else:
             idx_img = 0
         filename = files[idx_img]
 
         image = Image.open(filename).convert("RGB")
-        # print(image.size)
+
         if self.transform is not None:
             image = self.transform(image)
 
@@ -262,7 +259,7 @@ class PointsField(Field):
         self.with_transforms = with_transforms
         self.unpackbits = unpackbits
 
-    def load(self, model_path, idx, category):
+    def load(self, split, model_path, idx, category):
         """Loads the data point.
 
         Args:
@@ -311,7 +308,7 @@ class PointCloudField(Field):
         self.transform = transform
         self.with_transforms = with_transforms
 
-    def load(self, model_path, idx, category):
+    def load(self, split, model_path, idx, category):
         """Loads the data point.
         Args:
             model_path (str): path to model
@@ -363,7 +360,7 @@ class Shapes3dDataset(Dataset):
         self,
         dataset_folder,
         fields,
-        split=None,
+        split,
         categories=None,
         transform=None,
         num_points=2048,
@@ -404,7 +401,6 @@ class Shapes3dDataset(Dataset):
             category_map[i] = label
             label = label + 1
         self.category_map = category_map
-        print(self.category_map)
 
         # Read metadata file
         metadata_file = os.path.join(dataset_folder, "metadata.yaml")
@@ -414,7 +410,6 @@ class Shapes3dDataset(Dataset):
                 self.metadata = yaml.safe_load(f)
         else:
             self.metadata = {c: {"id": c, "name": "n/a"} for c in categories}
-        print(self.metadata)
         # Set index
         for c_idx, c in enumerate(categories):
             self.metadata[c]["idx"] = c_idx
@@ -431,7 +426,6 @@ class Shapes3dDataset(Dataset):
                 models_c = f.read().split("\n")
 
             self.models += [{"category": c, "model": m} for m in models_c]
-            print("Number of models {} for category {}".format(len(models_c), c))
 
     def __len__(self):
         """Returns the length of the dataset."""
@@ -451,7 +445,7 @@ class Shapes3dDataset(Dataset):
 
         data = {}
         for field_name, field in self.fields.items():
-            field_data = field.load(model_path, idx, c_idx)
+            field_data = field.load(self.split, model_path, idx, c_idx)
 
             if isinstance(field_data, dict):
                 # If the field returns a dict, flatten its top-level keys into
@@ -499,7 +493,7 @@ class Shapes3dDataset(Dataset):
         files = os.listdir(model_path)
         for field_name, field in self.fields.items():
             if not field.check_complete(files):
-                logger.warn('Field "%s" is incomplete: %s' % (field_name, model_path))
+                logger.warning('Field "%s" is incomplete: %s', field_name, model_path)
                 return False
 
         return True
