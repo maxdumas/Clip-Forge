@@ -1,154 +1,49 @@
 import argparse
 import io
-import logging
 import os
-from typing import Any
 
 import clip
 import matplotlib.pyplot as plt
-import numpy as np
 import pytorch_lightning as pl
 import torch
 from clip.model import CLIP
 from PIL import Image
 from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+from torch.utils.data import DataLoader2
+from torchdata.datapipes.iter import IterableWrapper
 
 import wandb
 from dataset import shapenet_dataset
 from networks.autoencoder import Autoencoder
 from networks.latent_flows import LatentFlows
-from utils import helper
+from utils.helper import set_seed
 from utils.visualization import make_3d_grid, multiple_plot, multiple_plot_voxel
 
 
-def experiment_name2(args):
-    tokens = [
-        "Clip_Conditioned",
-        args.flow_type,
-        args.num_blocks,
-        args.checkpoint,
-        args.num_views,
-        args.clip_model_type,
-        args.num_hidden,
-        args.seed_nf,
-    ]
-
-    if args.noise != "add":
-        tokens.append("no_noise")
-
-    return "_".join(map(str, tokens))
-
-
-def get_clip_model(args) -> tuple[Any, CLIP]:
-    if args.clip_model_type == "B-16":
+def get_clip_model(clip_model_type: str, device="cuda") -> tuple[CLIP, int, int]:
+    if clip_model_type == "B-16":
         print("Bigger model is being used B-16")
-        clip_model, clip_preprocess = clip.load("ViT-B/16", device=args.device)
+        clip_model, _ = clip.load("ViT-B/16", device=device)
         cond_emb_dim = 512
-    elif args.clip_model_type == "RN50x16":
+    elif clip_model_type == "RN50x16":
         print("Using the RN50x16 model")
-        clip_model, clip_preprocess = clip.load("RN50x16", device=args.device)
+        clip_model, _ = clip.load("RN50x16", device=device)
         cond_emb_dim = 768
     else:
-        clip_model, clip_preprocess = clip.load("ViT-B/32", device=args.device)
+        clip_model, _ = clip.load("ViT-B/32", device=device)
         cond_emb_dim = 512
 
     input_resolution = clip_model.visual.input_resolution
-    vocab_size = clip_model.vocab_size
-    print("cond_emb_dim:", cond_emb_dim)
-    print("Input resolution:", input_resolution)
-    print("Vocab size:", vocab_size)
-    args.n_px = input_resolution
-    args.cond_emb_dim = cond_emb_dim
-    return args, clip_model
+    return clip_model, input_resolution, cond_emb_dim
 
 
-def get_dataloader(args, split="train", dataset_flag=False):
-    dataset_name = args.dataset_name
-
-    if dataset_name == "Shapenet":
-        pointcloud_field = shapenet_dataset.PointCloudField("pointcloud.npz")
-        points_field = shapenet_dataset.PointsField("points.npz", unpackbits=True)
-        voxel_fields = shapenet_dataset.VoxelsField("model.binvox")
-
-        if split == "train":
-            image_field = shapenet_dataset.ImagesField(
-                "img_choy2016", random_view=True, n_px=args.n_px
-            )
-        else:
-            image_field = shapenet_dataset.ImagesField(
-                "img_choy2016", random_view=False, n_px=args.n_px
-            )
-
-        fields = {}
-
-        fields["pointcloud"] = pointcloud_field
-        fields["points"] = points_field
-        fields["voxels"] = voxel_fields
-        fields["images"] = image_field
-
-        def my_collate(batch):
-            batch = list(filter(lambda x: x is not None, batch))
-            return torch.utils.data.dataloader.default_collate(batch)
-
-        if split == "train":
-            dataset = shapenet_dataset.Shapes3dDataset(
-                args.dataset_path,
-                fields,
-                split=split,
-                categories=args.categories,
-                no_except=True,
-                transform=None,
-                num_points=args.num_points,
-            )
-
-            dataloader = DataLoader(
-                dataset,
-                batch_size=args.batch_size,
-                shuffle=True,
-                num_workers=args.num_workers,
-                drop_last=True,
-                collate_fn=my_collate,
-            )
-            total_shapes = len(dataset)
-        else:
-            dataset = shapenet_dataset.Shapes3dDataset(
-                args.dataset_path,
-                fields,
-                split=split,
-                categories=args.categories,
-                no_except=True,
-                transform=None,
-                num_points=args.num_points,
-            )
-            dataloader = DataLoader(
-                dataset,
-                batch_size=args.test_batch_size,
-                shuffle=True,
-                num_workers=args.num_workers,
-                drop_last=False,
-                collate_fn=my_collate,
-            )
-            total_shapes = len(dataset)
-
-        if dataset_flag == True:
-            return dataloader, total_shapes, dataset
-
-        return dataloader, total_shapes
-
-    else:
-        raise ValueError("Dataset name is not defined {}".format(dataset_name))
+def collate_fn(batch):
+    batch = list(filter(lambda x: x is not None, batch))
+    return torch.utils.data.dataloader.default_collate(batch)
 
 
-def get_condition_embeddings(
-    args,
-    autoencoder: Autoencoder,
-    clip_model: CLIP,
-    dataloader: DataLoader,
-    n_embeddings_per_datum=5,
-):
+class Embed(object):
     """
     Given an Autoencoder and CLIP model, generates 3D shape embeddings using the
     Autoencoder and 2D image rendering embeddings using CLIP for every data
@@ -159,50 +54,136 @@ def get_condition_embeddings(
 
     Embeddings will be repeatedly generated `n_embeddings_per_datum` times.
     """
-    autoencoder.eval()
-    clip_model.eval()
-    shape_embeddings = []
-    cond_embeddings = []
-    with torch.no_grad():
-        for i in range(0, n_embeddings_per_datum):
-            for data in tqdm(dataloader):
-                image = data["images"].type(torch.FloatTensor).to(args.device)
 
-                if args.input_type == "Voxel":
-                    data_input = data["voxels"].type(torch.FloatTensor).to(args.device)
-                elif args.input_type == "Pointcloud":
-                    data_input = (
-                        data["pc_org"]
-                        .type(torch.FloatTensor)
-                        .to(args.device)
-                        .transpose(-1, 1)
-                    )
+    def __init__(
+        self,
+        input_type: str,
+        autoencoder: Autoencoder,
+        clip_model: CLIP,
+        n_embeddings_per_datum: int = 5,
+    ):
+        self.input_type = input_type
+        self.autoencoder = autoencoder
+        self.clip_model = clip_model
+        self.n_embeddings_per_datum = n_embeddings_per_datum
 
-                shape_emb = autoencoder.encoder(data_input)
+    def embed(self, data):
+        image = data["images"]
 
-                image_features = clip_model.encode_image(image)
-                image_features = image_features / image_features.norm(
-                    dim=-1, keepdim=True
+        if self.input_type == "Voxel":
+            data_input = data["voxels"]
+        elif self.input_type == "Pointcloud":
+            data_input = data["pc_org"].transpose(-1, 1)
+
+        shape_emb = self.autoencoder.encoder(data_input)
+
+        image_features = self.clip_model.encode_image(image)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+        return shape_emb, image_features
+
+    def __call__(self, data):
+        return [self.embed(data) for _ in range(self.n_embeddings_per_datum)]
+
+
+class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
+    def __init__(
+        self,
+        dataset_name: str,
+        dataset_path: str,
+        categories: list[str],
+        batch_size: int,
+        test_batch_size: int,
+        num_points: int,
+        n_px: int,
+        embedder: Embed,
+    ) -> None:
+        super().__init__()
+
+        assert (
+            dataset_name == "Shapenet"
+        ), "Only the ShapeNet dataset is currently supported."
+
+        self.dataset_path = dataset_path
+        self.batch_size = batch_size
+        self.test_batch_size = test_batch_size
+        self.categories = categories
+        self.num_points = num_points
+        self.n_px = n_px
+        self.embedder = embedder
+
+    def setup(self, stage: str) -> None:
+        fields = {
+            "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
+            "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
+            "voxels": shapenet_dataset.VoxelsField("model.binvox"),
+            "images": shapenet_dataset.ImagesField(
+                "img_choy2016", random_view=stage == "fit", n_px=self.n_px
+            ),
+        }
+
+        if stage == "fit":
+            self.train_dataset = IterableWrapper(
+                shapenet_dataset.Shapes3dDataset(
+                    self.dataset_path,
+                    fields,
+                    split="train",
+                    categories=self.categories,
+                    no_except=True,
+                    num_points=self.num_points,
                 )
+            ).flatmap(self.embedder)
+            self.val_dataset = IterableWrapper(
+                shapenet_dataset.Shapes3dDataset(
+                    self.dataset_path,
+                    fields,
+                    split="val",
+                    categories=self.categories,
+                    no_except=True,
+                    num_points=self.num_points,
+                )
+            ).flatmap(self.embedder)
+        elif stage == "test":
+            self.test_dataset = IterableWrapper(
+                shapenet_dataset.Shapes3dDataset(
+                    self.dataset_path,
+                    fields,
+                    split="test",
+                    categories=self.categories,
+                    no_except=True,
+                    num_points=self.num_points,
+                )
+            ).flatmap(self.embedder)
 
-                shape_embeddings.append(shape_emb.detach().cpu().numpy())
-                cond_embeddings.append(image_features.detach().cpu().numpy())
-                # break
-            logging.info("Number of views done: %s/%s", i, n_embeddings_per_datum)
+    def train_dataloader(self) -> DataLoader2:
+        return DataLoader2(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            drop_last=True,
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count() or 0,
+        )
 
-        shape_embeddings = np.concatenate(shape_embeddings)
-        cond_embeddings = np.concatenate(cond_embeddings)
+    def val_dataloader(self) -> DataLoader2:
+        return DataLoader2(
+            self.val_dataset,
+            batch_size=self.test_batch_size,
+            shuffle=True,
+            drop_last=False,
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count() or 0,
+        )
 
-    logging.info(
-        "Embedding Shape %s, Train Condition Embedding %s",
-        shape_embeddings.shape,
-        cond_embeddings.shape,
-    )
-
-    return torch.utils.data.TensorDataset(
-        torch.from_numpy(shape_embeddings),
-        torch.from_numpy(cond_embeddings),
-    )
+    def test_dataloader(self) -> DataLoader2:
+        return DataLoader2(
+            self.test_dataset,
+            batch_size=self.test_batch_size,
+            shuffle=True,
+            drop_last=False,
+            collate_fn=collate_fn,
+            num_workers=os.cpu_count() or 0,
+        )
 
 
 class LogPredictionSamplesCallback(Callback):
@@ -278,10 +259,28 @@ class LogPredictionSamplesCallback(Callback):
             plt.close(fig)
 
 
-def get_local_parser(mode="args"):
+def get_local_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--output_type",
+        type=str,
+        default="Implicit",
+        help="What is the output representation",
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.05, help="Threshold for voxel stuff"
+    )
+    parser.add_argument(
         "--num_blocks", type=int, default=5, help="Num of blocks for prior"
+    )
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        default=os.environ["SM_CHANNEL_TRAIN"],
+        help="Dataset path",
+    )
+    parser.add_argument(
+        "--dataset_name", type=str, default="Shapenet", help="Dataset path"
     )
     parser.add_argument(
         "--flow_type",
@@ -298,6 +297,10 @@ def get_local_parser(mode="args"):
     parser.add_argument(
         "--emb_dims", type=int, default=128, help="Dimension of embedding"
     )
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument(
+        "--batch_size", type=int, default=32, help="Dimension of embedding"
+    )
     parser.add_argument(
         "--autoencoder_checkpoint",
         type=str,
@@ -306,8 +309,7 @@ def get_local_parser(mode="args"):
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default=None,
-        help="Checkpoint to load latent flow model",
+        help="W&B checkpoint name from which to load the Latent Flows Network",
     )
     parser.add_argument(
         "--text_query", nargs="+", default=None, metavar="N", help="text query array"
@@ -326,45 +328,32 @@ def get_local_parser(mode="args"):
         "--noise", type=str, default="add", metavar="N", help="add or remove"
     )
     parser.add_argument(
-        "--seed_nf", type=int, default=1, metavar="N", help="add or remove"
-    )
-    parser.add_argument(
         "--images_type", type=str, default=None, help="img_choy13 or img_custom"
     )
-    parser.add_argument("--n_px", type=int, default=224, help="Resolution of the image")
 
-    if mode == "args":
-        args = parser.parse_args()
-        return args
-    else:
-        return parser
+    args = parser.parse_args()
+    return args
 
 
 def main():
     args = get_local_parser()
 
-    manual_seed = args.seed_nf
-    helper.set_seed(manual_seed)
+    set_seed(args.seed)
 
     torch.set_float32_matmul_precision("medium")
 
     wandb_logger = WandbLogger(
         project="clip_forge",
-        name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-autoencoder"),
+        name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-latent-flows"),
         log_model="all",
+        offline=True,
     )
     wandb_logger.experiment.config.update(args)
 
-    # Loading datasets
-    train_dataloader, total_shapes = get_dataloader(args, split="train")
-    args.total_shapes = total_shapes
-    logging.info("Train Dataset size: %s", total_shapes)
-    val_dataloader, total_shapes_val = get_dataloader(args, split="val")
-    logging.info("Test Dataset size: %s", total_shapes_val)
+    # Load CLIP
+    clip_model, n_px, cond_emb_dim = get_clip_model(args.clip_model_type, device="cuda")
 
     # Loading networks
-    # Load CLIP
-    args, clip_model = get_clip_model(args)
 
     # Load Autoencoder from checkpoint generated by train_autoencoder.py
     # TODO: Modularize this and share code with train_autoencoder.py
@@ -373,6 +362,18 @@ def main():
     checkpoint_path = os.path.join(checkpoint_dir, "model.ckpt")
     print(f"Loading specified W&B autoencoder Checkpoint from {checkpoint_path}.")
     net = Autoencoder.load_from_checkpoint(checkpoint_path)
+
+    # Loading datasets
+    datamodule = LatentFlowsShapeNetDataModule(
+        args.dataset_name,
+        args.dataset_path,
+        args.categories,
+        args.batch_size,
+        args.test_batch_size,
+        args.num_points,
+        n_px,
+        Embed(args.input_type, net, clip_model, args.num_views),
+    )
 
     # Load latent flow network
     if args.checkpoint is not None:
@@ -395,36 +396,13 @@ def main():
     else:
         latent_flow_network = LatentFlows(
             args.emb_dims,
-            args.cond_emb_dim,
+            cond_emb_dim,
+            lr=args.lr,
             flow_type=args.flow_type,
             num_blocks=args.num_blocks,
             num_hidden=args.num_hidden,
         )
 
-    # Generate TensorDatasets for Autoencoded shape embeddings and CLIP image embeddings
-    logging.info("Getting train shape embeddings and condition embedding")
-    train_dataset_new = get_condition_embeddings(
-        args, net, clip_model, train_dataloader, n_embeddings_per_datum=args.num_views
-    )
-    train_dataloader_new = DataLoader(
-        train_dataset_new,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-    )
-
-    logging.info("Getting val shape embeddings and condition embedding")
-    val_dataset_new = get_condition_embeddings(
-        args, net, clip_model, val_dataloader, n_embeddings_per_datum=1
-    )
-    val_dataloader_new = DataLoader(
-        val_dataset_new,
-        batch_size=args.test_batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=False,
-    )
     checkpoint_callback = ModelCheckpoint(
         "/opt/ml/checkpoints",
         monitor="Loss/val",
@@ -445,11 +423,7 @@ def main():
         precision=16,
     )
 
-    trainer.fit(
-        latent_flow_network,
-        train_dataloaders=train_dataloader_new,
-        val_dataloaders=val_dataloader_new,
-    )
+    trainer.fit(latent_flow_network, datamodule=datamodule)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 import wandb
 from dataset import shapenet_dataset
 from networks.autoencoder import Autoencoder
-from utils import helper
+from utils.helper import set_seed
 from utils.visualization import multiple_plot_voxel, plot_real_pred
 
 
@@ -198,15 +198,6 @@ def parsing(mode="args") -> Any:
         default="add_noise",
         help="add_noise or none",
     )
-    parser.add_argument(
-        "--reconstruct_loss_type",
-        type=str,
-        default="sum",
-        help="bce or sum (mse) or mean (mse)",
-    )
-    parser.add_argument(
-        "--pc_dims", type=int, default=1024, help="Dimension of embedding"
-    )
 
     ### Dataset details
     parser.add_argument(
@@ -232,7 +223,7 @@ def parsing(mode="args") -> Any:
     parser.add_argument("--seed", type=int, default=1, help="Seed")
     parser.add_argument("--epochs", type=int, default=300, help="Total epochs")
     parser.add_argument(
-        "--checkpoint", type=str, default=None, help="The name of a Weights & Biases Checkpoint to load and use"
+        "--checkpoint", type=str, default=None, help="W&B checkpoint name from which to load the Autoencoder"
     )
     parser.add_argument(
         "--gpus", nargs="+", default=os.environ.get("SM_NUM_GPUS", "0"), help="GPU list"
@@ -257,16 +248,13 @@ def parsing(mode="args") -> Any:
         help="what sampling type: None--> Uniform",
     )
 
-    if mode == "args":
-        args = parser.parse_args()
-        return args
-    else:
-        return parser
+    args = parser.parse_args()
+    return args
 
 
 def main():
     args = parsing()
-    helper.set_seed(args.seed)
+    set_seed(args.seed)
 
     torch.set_float32_matmul_precision("medium")
 
