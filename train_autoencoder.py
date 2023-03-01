@@ -59,7 +59,6 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
                 self.fields,
                 split="train",
                 categories=self.categories,
-                no_except=True,
                 transform=None,
                 num_points=self.num_points,
                 num_sdf_points=self.num_sdf_points,
@@ -70,7 +69,6 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
                 self.fields,
                 split="val",
                 categories=self.categories,
-                no_except=True,
                 transform=None,
                 num_points=self.num_points,
                 num_sdf_points=self.test_num_sdf_points,
@@ -82,7 +80,6 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
                 self.fields,
                 split="test",
                 categories=self.categories,
-                no_except=True,
                 transform=None,
                 num_points=self.num_points,
                 num_sdf_points=self.test_num_sdf_points,
@@ -203,7 +200,7 @@ def parsing(mode="args") -> Any:
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default=os.environ["SM_CHANNEL_TRAIN"],
+        default=os.environ.get("SM_CHANNEL_TRAIN", None),
         help="Dataset path",
     )
     parser.add_argument(
@@ -311,8 +308,8 @@ def main():
         max_epochs=args.epochs,
         logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stop_callback, sampling_callback],
-        accelerator="gpu",
-        devices=args.gpus,
+        # accelerator="gpu",
+        # devices=args.gpus,
         precision=16,
     )
 

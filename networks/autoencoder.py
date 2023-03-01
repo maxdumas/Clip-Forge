@@ -145,7 +145,7 @@ class VoxelEncoderBN(nn.Module):
         self.last_feature_transform = last_feature_transform
 
     def forward(self, x: Tensor):
-        batch_size = x.size(0)
+        batch_size = x.shape[0]
         x = x.unsqueeze(1)
         net = self.conv_in(x)
         net = self.conv_0(self.actvn(self.conv0_bn(net)))

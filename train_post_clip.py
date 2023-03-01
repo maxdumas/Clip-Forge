@@ -68,12 +68,16 @@ class Embed(object):
         self.n_embeddings_per_datum = n_embeddings_per_datum
 
     def embed(self, data):
+        # TODO: The issue here is that the incoming data has not yet been loaded into a Tensor. We need to convert it to a Tesnor
         image = data["images"]
 
         if self.input_type == "Voxel":
             data_input = data["voxels"]
         elif self.input_type == "Pointcloud":
             data_input = data["pc_org"].transpose(-1, 1)
+
+        print(data_input.shape)
+        print(data_input.shape[0])
 
         shape_emb = self.autoencoder.encoder(data_input)
 
@@ -129,7 +133,6 @@ class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
                     fields,
                     split="train",
                     categories=self.categories,
-                    no_except=True,
                     num_points=self.num_points,
                 )
             ).flatmap(self.embedder)
@@ -139,7 +142,6 @@ class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
                     fields,
                     split="val",
                     categories=self.categories,
-                    no_except=True,
                     num_points=self.num_points,
                 )
             ).flatmap(self.embedder)
@@ -150,7 +152,6 @@ class LatentFlowsShapeNetDataModule(pl.LightningDataModule):
                     fields,
                     split="test",
                     categories=self.categories,
-                    no_except=True,
                     num_points=self.num_points,
                 )
             ).flatmap(self.embedder)
@@ -261,6 +262,15 @@ class LogPredictionSamplesCallback(Callback):
 
 def get_local_parser():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=1, help="Seed")
+    parser.add_argument("--epochs", type=int, default=300, help="Total epochs")
+    parser.add_argument("--categories", nargs="+", default=None, metavar="N")
+    parser.add_argument(
+        "--input_type",
+        type=str,
+        default="Voxel",
+        help="What is the input representation",
+    )
     parser.add_argument(
         "--output_type",
         type=str,
@@ -276,7 +286,7 @@ def get_local_parser():
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default=os.environ["SM_CHANNEL_TRAIN"],
+        default=os.environ.get("SM_CHANNEL_TRAIN", None),
         help="Dataset path",
     )
     parser.add_argument(
@@ -297,9 +307,13 @@ def get_local_parser():
     parser.add_argument(
         "--emb_dims", type=int, default=128, help="Dimension of embedding"
     )
+    parser.add_argument("--num_points", type=int, default=2025, help="Number of points")
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Dimension of embedding"
+    )
+    parser.add_argument(
+        "--test_batch_size", type=int, default=32, help="Dimension of embedding"
     )
     parser.add_argument(
         "--autoencoder_checkpoint",
@@ -330,6 +344,9 @@ def get_local_parser():
     parser.add_argument(
         "--images_type", type=str, default=None, help="img_choy13 or img_custom"
     )
+    parser.add_argument(
+        "--gpus", nargs="+", default=os.environ.get("SM_NUM_GPUS", "0"), help="GPU list"
+    )
 
     args = parser.parse_args()
     return args
@@ -346,12 +363,11 @@ def main():
         project="clip_forge",
         name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-latent-flows"),
         log_model="all",
-        offline=True,
     )
     wandb_logger.experiment.config.update(args)
 
     # Load CLIP
-    clip_model, n_px, cond_emb_dim = get_clip_model(args.clip_model_type, device="cuda")
+    clip_model, n_px, cond_emb_dim = get_clip_model(args.clip_model_type, device="cpu")
 
     # Loading networks
 
@@ -397,7 +413,7 @@ def main():
         latent_flow_network = LatentFlows(
             args.emb_dims,
             cond_emb_dim,
-            lr=args.lr,
+            # lr=args.lr, # TODO: This is coming from argparse as non-null. Unclear why.
             flow_type=args.flow_type,
             num_blocks=args.num_blocks,
             num_hidden=args.num_hidden,
@@ -418,8 +434,10 @@ def main():
         max_epochs=args.epochs,
         logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stop_callback, sampling_callback],
-        accelerator="gpu",
-        devices=args.gpus,
+        # accelerator="gpu",
+        # devices=args.gpus,
+        # accelerator="mps",
+        # devices="1",
         precision=16,
     )
 

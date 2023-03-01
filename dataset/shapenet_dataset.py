@@ -113,7 +113,7 @@ class Field(object):
 
 class VoxelsField(Field):
     """Voxel field class.
-    It provides the class used for voxel-based data.
+    It provides the class used for voxel-based data. Voxel data is stored as 3D numpy array.
     Args:
         file_name (str): file name
         transform (list): list of transformations applied to data points
@@ -363,7 +363,6 @@ class Shapes3dDataset(Dataset):
         fields,
         split=None,
         categories=None,
-        no_except=True,
         transform=None,
         num_points=2048,
         num_sdf_points=5000,
@@ -377,14 +376,12 @@ class Shapes3dDataset(Dataset):
             fields (dict): dictionary of fields
             split (str): which split is used
             categories (list): list of categories to use
-            no_except (bool): no exception
             transform (callable): transformation applied to data points
         """
         # Attributes
         self.split = split
         self.dataset_folder = dataset_folder
         self.fields = fields
-        self.no_except = no_except
         self.transform = transform
         self.num_points = num_points
         self.num_sdf_points = num_sdf_points
@@ -449,32 +446,24 @@ class Shapes3dDataset(Dataset):
         c_idx = self.metadata[category]["idx"]
 
         model_path = os.path.join(self.dataset_folder, category, model)
-        data = {}
 
+        data = {}
         for field_name, field in self.fields.items():
-            try:
-                field_data = field.load(model_path, idx, c_idx)
-            except Exception as e:
-                if self.no_except:
-                    logger.warning(
-                        "Error occured when loading field %s of model %s",
-                        field_name,
-                        model,
-                    )
-                    print(e)
-                    return None
-                else:
-                    raise
+            field_data = field.load(model_path, idx, c_idx)
 
             if isinstance(field_data, dict):
-                for k, v in field_data.items():
-                    if k is None:
-                        data[field_name] = v
+                # If the field returns a dict, flatten its top-level keys into
+                # the form `{field_name}.{key}`.
+                for key, value in field_data.items():
+                    if key is None:
+                        # TODO: When can `key` possibly be None?
+                        data[field_name] = value
                     else:
-                        data["%s.%s" % (field_name, k)] = v
+                        data[f"{field_name}.{key}"] = value
             else:
                 data[field_name] = field_data
 
+        # Randomly sample `num_points` points from the pointcloud
         total_list = list(range(len(data["pointcloud"])))
         random_index = random.sample(total_list, self.num_points)
         if self.norm:
@@ -487,6 +476,7 @@ class Shapes3dDataset(Dataset):
 
         data["idx"] = idx
 
+        # Randomly sample `num_sdf_points` from the implicit points
         total_list = list(range(len(data["points"])))
         random_index_sdf = random.sample(total_list, self.num_sdf_points)
         data["points"] = data["points"][random_index_sdf]
