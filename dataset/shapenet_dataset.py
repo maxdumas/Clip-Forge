@@ -368,7 +368,6 @@ class Shapes3dDataset(Dataset):
         num_points=2048,
         num_sdf_points=5000,
         norm=False,
-        sampling_type=None,
     ):
         """Initialization of the the 3D shape dataset.
 
@@ -389,7 +388,6 @@ class Shapes3dDataset(Dataset):
         self.num_points = num_points
         self.num_sdf_points = num_sdf_points
         self.norm = norm
-        self.sampling_type = sampling_type
 
         # If categories is None, use all subfolders
         if categories is None:
