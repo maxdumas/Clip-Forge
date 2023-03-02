@@ -1,3 +1,5 @@
+from typing import Union, Literal
+
 import numpy as np
 import torch
 from torch import Tensor
@@ -10,6 +12,7 @@ from utils.helper import get_optimizer_model
 from utils.visualization import make_3d_grid
 
 EPS = 1e-6
+
 
 # borrowed from https://github.com/ThibaultGROUEIX/AtlasNet
 def dist_chamfer(a: Tensor, b: Tensor) -> tuple[Tensor, Tensor]:
@@ -240,38 +243,46 @@ def compute_iou(occ1: Tensor, occ2: Tensor):
 
 
 class Autoencoder(pl.LightningModule):
-    def __init__(self, args):
-        super().__init__()
-        self.save_hyperparameters()
+    encoder: nn.Module
+    decoder: nn.Module
 
+    def __init__(
+        self,
+        batch_size: int = 32,
+        test_batch_size: int = 32,
+        lr: float = 0.0001,
+        num_points: int = 2025,
+        emb_dims: int = 128,
+        input_type: str = "Voxel",
+        output_type: str = "Implicit",
+        threshold: float = 0.05,
+    ):
+        super().__init__()
         ### Local Model Hyperparameters
-        self.args = args
-        self.learning_rate = self.args.lr
-        self.batch_size = self.args.batch_size
-        self.emb_dims = args.emb_dims
-        self.encoder_type = args.encoder_type
-        self.decoder_type = args.decoder_type
-        self.input_type = args.input_type
-        self.output_type = args.output_type
+        self.lr = lr
+        self.batch_size = batch_size
+        self.test_batch_size = test_batch_size
+        self.emb_dims = emb_dims
+        self.input_type = input_type
+        self.output_type = output_type
+        self.threshold = threshold
 
         ### Sub-Network def
         if self.input_type == "Voxel":
             self.encoder = VoxelEncoderBN(
-                dim=3, c_dim=args.emb_dims, last_feature_transform="add_noise"
+                dim=3, c_dim=emb_dims, last_feature_transform="add_noise"
             )
         elif self.input_type == "Pointcloud":
             self.encoder = PointNet(
-                pc_dims=1024, c_dim=args.emb_dims, last_feature_transform="add_noise"
+                pc_dims=1024, c_dim=emb_dims, last_feature_transform="add_noise"
             )
         else:
             raise ValueError("The input representation is not implemented")
 
         if self.output_type == "Implicit":
-            self.decoder = Occ_Simple_Decoder(z_dim=args.emb_dims)
+            self.decoder = Occ_Simple_Decoder(z_dim=emb_dims)
         elif self.output_type == "Pointcloud":
-            self.decoder = Foldingnet_decoder(
-                num_points=args.num_points, z_dim=args.emb_dims
-            )
+            self.decoder = Foldingnet_decoder(num_points=num_points, z_dim=emb_dims)
         else:
             raise ValueError("The output representation is not implemented")
 
@@ -298,24 +309,22 @@ class Autoencoder(pl.LightningModule):
         return pred, shape_embs
 
     def configure_optimizers(self):
-        optimizer = get_optimizer_model(
-            self.args.optimizer, self, lr=self.learning_rate
-        )
-        return optimizer
+        # TODO: How do we parameterize this using LightningCLI?
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def training_step(self, data, batch_idx):
         # Load appropriate input data from the training set
-        if self.args.input_type == "Voxel":
+        if self.input_type == "Voxel":
             data_input = data["voxels"]
-        elif self.args.input_type == "Pointcloud":
+        elif self.input_type == "Pointcloud":
             data_input = data["pc_org"].transpose(-1, 1)
 
         # Load appropriate output data from the training set
-        if self.args.output_type == "Implicit":
+        if self.output_type == "Implicit":
             query_points = data["points"]
             occ = data["points.occ"]
             gt = occ
-        elif self.args.output_type == "Pointcloud":
+        elif self.output_type == "Pointcloud":
             query_points = None
             gt = data["pc_org"]
 
@@ -330,22 +339,23 @@ class Autoencoder(pl.LightningModule):
         return loss
 
     def validation_step(self, data, data_idx):
-        if self.args.input_type == "Voxel":
+        if self.input_type == "Voxel":
             data_input = data["voxels"]
-        elif self.args.input_type == "Pointcloud":
+        elif self.input_type == "Pointcloud":
             data_input = data["pc_org"].transpose(-1, 1)
 
-        if self.args.output_type == "Implicit":
+        if self.output_type == "Implicit":
             # Compute IOU loss for Implicit representation
             points_voxels = make_3d_grid(
                 (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
-            ).to(self.device) # TODO: Do this in the correct way
+            ).to(
+                self.device
+            )  # TODO: Do this in the correct way
             query_points = points_voxels.expand(
-                self.args.test_batch_size, *points_voxels.size()
+                self.test_batch_size, *points_voxels.size()
             )
 
-
-            if self.args.test_batch_size != data_input.size(0):
+            if self.test_batch_size != data_input.size(0):
                 query_points = points_voxels.expand(
                     data_input.size(0), *points_voxels.size()
                 )
@@ -355,10 +365,10 @@ class Autoencoder(pl.LightningModule):
 
             # Compute reconstruction loss
             voxels_occ_np = data["voxels"] >= 0.5
-            occ_hat_np = pred >= self.args.threshold
+            occ_hat_np = pred >= self.threshold
             iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
             loss = iou_voxels.item()
-        elif self.args.output_type == "Pointcloud":
+        elif self.output_type == "Pointcloud":
             query_points = None
             gt = data["pc_org"]
 

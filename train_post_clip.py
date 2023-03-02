@@ -287,17 +287,12 @@ def main():
     datamodule = ShapeNetDataModule(
         dataset_name=args.dataset_name,
         dataset_path=args.dataset_path,
-        fields={
-            "pointcloud": PointCloudField("pointcloud.npz"),
-            "points": PointsField("points.npz", unpackbits=True),
-            "voxels": VoxelsField("model.binvox"),
-            "images": ImagesField("img_choy2016", n_px=n_px),
-        },
         categories=args.categories,
         batch_size=args.batch_size,
         test_batch_size=args.test_batch_size,
         num_points=args.num_points,
         collate_fn=Embed(args.input_type, net, clip_model, args.num_views),
+        use_image_res=n_px
     )
 
     # Load latent flow network

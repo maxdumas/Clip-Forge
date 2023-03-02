@@ -1,5 +1,5 @@
 # Requirements to be installed when running in SageMaker
 
 wandb
-pytorch_lightning
+pytorch_lightning[extra]
 trimesh
