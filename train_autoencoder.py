@@ -1,9 +1,7 @@
 import io
 import os
-from typing import Any
 
 import matplotlib.pyplot as plt
-import pytorch_lightning as pl
 import torch
 from PIL import Image
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint, EarlyStopping

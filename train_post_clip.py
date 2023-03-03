@@ -12,12 +12,6 @@ from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
 
 import wandb
-from dataset.shapenet_dataset import (
-    ImagesField,
-    PointsField,
-    VoxelsField,
-    PointCloudField,
-)
 from dataset.datamodule import ShapeNetDataModule
 from networks.autoencoder import Autoencoder
 from networks.latent_flows import LatentFlows
@@ -68,13 +62,12 @@ class Embed:
 
     @torch.no_grad()
     def embed(self, datum):
-        # TODO: The issue here is that the incoming data has not yet been loaded into a Tensor. We need to convert it to a Tesnor
         image = datum["images"]
 
         if self.input_type == "Voxel":
-            data_input = datum["voxels"]
+            data_input = datum["voxels"].to(self.autoencoder.device)
         elif self.input_type == "Pointcloud":
-            data_input = datum["pc_org"].transpose(-1, 1)
+            data_input = datum["pc_org"].transpose(-1, 1).to(self.autoencoder.device)
 
         shape_emb = self.autoencoder.encoder(data_input)
 
@@ -194,7 +187,7 @@ def get_local_parser():
         help="Dataset path",
     )
     parser.add_argument(
-        "--dataset_name", type=str, default="Shapenet", help="Dataset path"
+        "--dataset_name", type=str, default="ShapeNet", help="Dataset path"
     )
     parser.add_argument(
         "--flow_type",
@@ -262,16 +255,17 @@ def main():
     set_seed(args.seed)
 
     torch.set_float32_matmul_precision("medium")
+    torch.multiprocessing.set_start_method("spawn")
 
     wandb_logger = WandbLogger(
         project="clip_forge",
         name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-latent-flows"),
         log_model="all",
     )
-    wandb_logger.experiment.config.update(args)
+    wandb_logger.log_hyperparams(args)
 
     # Load CLIP
-    clip_model, n_px, cond_emb_dim = get_clip_model(args.clip_model_type, device="cpu")
+    clip_model, n_px, cond_emb_dim = get_clip_model(args.clip_model_type, device="cuda")
 
     # Loading networks
 
@@ -340,8 +334,8 @@ def main():
         max_epochs=args.epochs,
         logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stop_callback, sampling_callback],
-        # accelerator="gpu",
-        # devices=args.gpus,
+        accelerator="gpu",
+        devices=args.gpus,
         # accelerator="mps",
         # devices="1",
         precision=16,
