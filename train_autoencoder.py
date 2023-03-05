@@ -212,7 +212,7 @@ def parsing(mode="args") -> Any:
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default=os.environ["SM_CHANNEL_TRAIN"],
+        default=os.environ.get("SM_CHANNEL_TRAIN", None),
         help="Dataset path",
     )
     parser.add_argument(
