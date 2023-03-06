@@ -194,7 +194,7 @@ def main():
         log_model="all",
     )
     cli.trainer.logger = wandb_logger
-    wandb_logger.experiment.config.update(cli.config.as_flat())
+    wandb_logger.log_hyperparams(cli.config)
 
     ckpt_path = cli.config.ckpt_path
     if ckpt_path is not None:

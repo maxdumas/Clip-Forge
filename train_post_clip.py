@@ -1,6 +1,5 @@
 import argparse
 import io
-import logging
 import os
 from typing import Any
 
@@ -26,46 +25,26 @@ from utils.visualization import make_3d_grid, multiple_plot, multiple_plot_voxel
 
 memory = Memory(".joblib_cache")
 
+clip_models = {
+    "B-16": {
+        "name": "ViT-B/16",
+        "emb_dim": 512,
+    },
+    "B-32": {
+        "name": "ViT-B/32",
+        "emb_dim": 512,
+    },
+    "RN50x16": {
+        "name": "RN50x16",
+        "emb_dim": 768,
+    }
+}
 
-def experiment_name2(args):
-    tokens = [
-        "Clip_Conditioned",
-        args.flow_type,
-        args.num_blocks,
-        args.checkpoint,
-        args.num_views,
-        args.clip_model_type,
-        args.num_hidden,
-        args.seed_nf,
-    ]
-
-    if args.noise != "add":
-        tokens.append("no_noise")
-
-    return "_".join(map(str, tokens))
-
-
-def get_clip_model(args) -> tuple[Any, CLIP]:
-    if args.clip_model_type == "B-16":
-        print("Bigger model is being used B-16")
-        clip_model, clip_preprocess = clip.load("ViT-B/16", device=args.device)
-        cond_emb_dim = 512
-    elif args.clip_model_type == "RN50x16":
-        print("Using the RN50x16 model")
-        clip_model, clip_preprocess = clip.load("RN50x16", device=args.device)
-        cond_emb_dim = 768
-    else:
-        clip_model, clip_preprocess = clip.load("ViT-B/32", device=args.device)
-        cond_emb_dim = 512
-
+def get_clip_model(clip_model_type: str, device) -> tuple[CLIP, int, int]:
+    model_opts = clip_models[clip_model_type]
+    clip_model, _ = clip.load(model_opts["name"], device=device)
     input_resolution = clip_model.visual.input_resolution
-    vocab_size = clip_model.vocab_size
-    print("cond_emb_dim:", cond_emb_dim)
-    print("Input resolution:", input_resolution)
-    print("Vocab size:", vocab_size)
-    args.n_px = input_resolution
-    args.cond_emb_dim = cond_emb_dim
-    return args, clip_model
+    return clip_model, input_resolution, model_opts["emb_dim"]
 
 
 def my_collate(batch):
@@ -73,77 +52,61 @@ def my_collate(batch):
     return torch.utils.data.dataloader.default_collate(batch)
 
 
-def get_dataloader(args, split="train", dataset_flag=False):
+def get_dataloader(args, n_px: int, split="train", ):
     dataset_name = args.dataset_name
 
-    if dataset_name == "Shapenet":
-        pointcloud_field = shapenet_dataset.PointCloudField("pointcloud.npz")
-        points_field = shapenet_dataset.PointsField("points.npz", unpackbits=True)
-        voxel_fields = shapenet_dataset.VoxelsField("model.binvox")
-
-        if split == "train":
-            image_field = shapenet_dataset.ImagesField(
-                "img_choy2016", random_view=True, n_px=args.n_px
-            )
-        else:
-            image_field = shapenet_dataset.ImagesField(
-                "img_choy2016", random_view=False, n_px=args.n_px
-            )
-
-        fields = {}
-
-        fields["pointcloud"] = pointcloud_field
-        fields["points"] = points_field
-        fields["voxels"] = voxel_fields
-        fields["images"] = image_field
-
-        if split == "train":
-            dataset = shapenet_dataset.Shapes3dDataset(
-                args.dataset_path,
-                fields,
-                split=split,
-                categories=args.categories,
-                no_except=True,
-                transform=None,
-                num_points=args.num_points,
-            )
-
-            dataloader = DataLoader(
-                dataset,
-                batch_size=args.batch_size,
-                shuffle=True,
-                num_workers=os.cpu_count() or 0,
-                drop_last=True,
-                collate_fn=my_collate,
-            )
-            total_shapes = len(dataset)
-        else:
-            dataset = shapenet_dataset.Shapes3dDataset(
-                args.dataset_path,
-                fields,
-                split=split,
-                categories=args.categories,
-                no_except=True,
-                transform=None,
-                num_points=args.num_points,
-            )
-            dataloader = DataLoader(
-                dataset,
-                batch_size=args.test_batch_size,
-                shuffle=False,
-                num_workers=os.cpu_count() or 0,
-                drop_last=False,
-                collate_fn=my_collate,
-            )
-            total_shapes = len(dataset)
-
-        if dataset_flag == True:
-            return dataloader, total_shapes, dataset
-
-        return dataloader, total_shapes
-
-    else:
+    if dataset_name != "Shapenet":
         raise ValueError("Dataset name is not defined {}".format(dataset_name))
+
+    fields = {
+        "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
+        "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
+        "voxels": shapenet_dataset.VoxelsField("model.binvox"),
+        "images": shapenet_dataset.ImagesField(
+            "img_choy2016", random_view=split == "train", n_px=n_px
+        ),
+    }
+
+    if split == "train":
+        dataset = shapenet_dataset.Shapes3dDataset(
+            args.dataset_path,
+            fields,
+            split=split,
+            categories=args.categories,
+            no_except=True,
+            transform=None,
+            num_points=args.num_points,
+        )
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=os.cpu_count() or 0,
+            drop_last=True,
+            collate_fn=my_collate,
+        )
+    else:
+        dataset = shapenet_dataset.Shapes3dDataset(
+            args.dataset_path,
+            fields,
+            split=split,
+            categories=args.categories,
+            no_except=True,
+            transform=None,
+            num_points=args.num_points,
+        )
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.test_batch_size,
+            shuffle=False,
+            num_workers=os.cpu_count() or 0,
+            drop_last=False,
+            collate_fn=my_collate,
+        )
+
+    return dataloader
+
 
 
 @memory.cache(ignore=["device", "autoencoder", "clip_model", "dataloader"])
@@ -170,7 +133,7 @@ def get_condition_embeddings(
     shape_embeddings = []
     cond_embeddings = []
     with torch.no_grad():
-        for i in range(0, n_embeddings_per_datum):
+        for _ in range(0, n_embeddings_per_datum):
             for data in tqdm(dataloader):
                 image = data["images"].type(torch.FloatTensor).to(device)
 
@@ -194,16 +157,9 @@ def get_condition_embeddings(
                 shape_embeddings.append(shape_emb.detach().cpu().numpy())
                 cond_embeddings.append(image_features.detach().cpu().numpy())
                 # break
-            logging.info("Number of views done: %s/%s", i, n_embeddings_per_datum)
 
         shape_embeddings = np.concatenate(shape_embeddings)
         cond_embeddings = np.concatenate(cond_embeddings)
-
-    logging.info(
-        "Embedding Shape %s, Train Condition Embedding %s",
-        shape_embeddings.shape,
-        cond_embeddings.shape,
-    )
 
     return torch.utils.data.TensorDataset(
         torch.from_numpy(shape_embeddings),
@@ -249,6 +205,7 @@ class LogPredictionSamplesCallback(Callback):
             # We only want to generate prediction images on the first batch of the epoch
             return
 
+        samples = []
         for text_in in self.text_query:
             text = clip.tokenize([text_in]).to(self.autoencoder.device)
             text_features = self.clip_model.encode_text(text)
@@ -280,11 +237,13 @@ class LogPredictionSamplesCallback(Callback):
             fig.savefig(buf)
             buf.seek(0)
             im = Image.open(buf)
-            trainer.logger.experiment.log({"samples": [wandb.Image(im)]})
+            samples.append(wandb.Image(im, caption=text_in))
             plt.close(fig)
 
+        trainer.logger.experiment.log({"samples": samples})
 
-def get_local_parser(mode="args"):
+
+def get_local_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset_path",
@@ -383,11 +342,8 @@ def get_local_parser(mode="args"):
     )
     parser.add_argument("--n_px", type=int, default=224, help="Resolution of the image")
 
-    if mode == "args":
-        args = parser.parse_args()
-        return args
-    else:
-        return parser
+    args = parser.parse_args()
+    return args
 
 
 def main():
@@ -401,30 +357,24 @@ def main():
     wandb_logger = WandbLogger(
         project="clip_forge",
         name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-latent-flows"),
-        log_model="all",
+        log_model=True,
     )
-    wandb_logger.experiment.config.update(args)
+    wandb_logger.log_hyperparams(args)
 
-    # Loading datasets
-    train_dataloader, total_shapes = get_dataloader(args, split="train")
-    args.total_shapes = total_shapes
-    logging.info("Train Dataset size: %s", total_shapes)
-    val_dataloader, total_shapes_val = get_dataloader(args, split="val")
-    logging.info("Test Dataset size: %s", total_shapes_val)
-
-    # Loading networks
     # Load CLIP
     args.device = "cuda"  # TODO: Define this in a better way
-    args, clip_model = get_clip_model(args)
+    clip_model, n_px, cond_emb_dim = get_clip_model(args.clip_model_type, args.device)
 
+    # Loading datasets
+    train_dataloader = get_dataloader(args, n_px, split="train")
+    val_dataloader = get_dataloader(args, n_px, split="val")
+
+    # Loading other networks
     # Load Autoencoder from checkpoint generated by train_autoencoder.py
     # TODO: Modularize this and share code with train_autoencoder.py
     checkpoint = wandb_logger.use_artifact(args.autoencoder_checkpoint, "model")
     checkpoint_dir = checkpoint.download()
     checkpoint_path = os.path.join(checkpoint_dir, "model.ckpt")
-    # checkpoint_path = os.path.join(
-    #     "artifacts/model-clip-forge-autoencoder-2023-02-26-06-15-12-280-tpdwmj-algo-1:v151/model.ckpt"
-    # )
     print(f"Loading specified W&B autoencoder Checkpoint from {checkpoint_path}.")
     net = Autoencoder.load_from_checkpoint(checkpoint_path).to(
         args.device
@@ -451,14 +401,15 @@ def main():
     else:
         latent_flow_network = LatentFlows(
             args.emb_dims,
-            args.cond_emb_dim,
+            cond_emb_dim,
             flow_type=args.flow_type,
             num_blocks=args.num_blocks,
             num_hidden=args.num_hidden,
         )
 
+    wandb_logger.watch(latent_flow_network)
+
     # Generate TensorDatasets for Autoencoded shape embeddings and CLIP image embeddings
-    logging.info("Getting train shape embeddings and condition embedding")
     train_dataset_new = get_condition_embeddings(
         args.input_type,
         args.device,
@@ -475,7 +426,6 @@ def main():
         drop_last=True,
     )
 
-    logging.info("Getting val shape embeddings and condition embedding")
     val_dataset_new = get_condition_embeddings(
         args.input_type,
         args.device,
@@ -501,7 +451,7 @@ def main():
         every_n_epochs=5,
         save_last=True,
     )
-    early_stop_callback = EarlyStopping(monitor="Loss/val", mode="min")
+    early_stop_callback = EarlyStopping(monitor="Loss/val", mode="min", patience=15)
     sampling_callback = LogPredictionSamplesCallback(
         args.text_query, args.threshold, args.output_type, net, clip_model
     )
@@ -509,8 +459,7 @@ def main():
         max_epochs=args.epochs,
         logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stop_callback, sampling_callback],
-        accelerator="gpu",
-        devices="1",  # TODO
+        accelerator="auto",
         precision=16,
     )
 
