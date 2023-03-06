@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Any
 
+from joblib import Memory
 import clip
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,6 +23,8 @@ from networks.autoencoder import Autoencoder
 from networks.latent_flows import LatentFlows
 from utils import helper
 from utils.visualization import make_3d_grid, multiple_plot, multiple_plot_voxel
+
+memory = Memory(".joblib_cache")
 
 
 def experiment_name2(args):
@@ -65,6 +68,11 @@ def get_clip_model(args) -> tuple[Any, CLIP]:
     return args, clip_model
 
 
+def my_collate(batch):
+    batch = list(filter(lambda x: x is not None, batch))
+    return torch.utils.data.dataloader.default_collate(batch)
+
+
 def get_dataloader(args, split="train", dataset_flag=False):
     dataset_name = args.dataset_name
 
@@ -88,10 +96,6 @@ def get_dataloader(args, split="train", dataset_flag=False):
         fields["points"] = points_field
         fields["voxels"] = voxel_fields
         fields["images"] = image_field
-
-        def my_collate(batch):
-            batch = list(filter(lambda x: x is not None, batch))
-            return torch.utils.data.dataloader.default_collate(batch)
 
         if split == "train":
             dataset = shapenet_dataset.Shapes3dDataset(
@@ -126,7 +130,7 @@ def get_dataloader(args, split="train", dataset_flag=False):
             dataloader = DataLoader(
                 dataset,
                 batch_size=args.test_batch_size,
-                shuffle=True,
+                shuffle=False,
                 num_workers=os.cpu_count() or 0,
                 drop_last=False,
                 collate_fn=my_collate,
@@ -142,8 +146,10 @@ def get_dataloader(args, split="train", dataset_flag=False):
         raise ValueError("Dataset name is not defined {}".format(dataset_name))
 
 
+@memory.cache(ignore=["device", "autoencoder", "clip_model", "dataloader"])
 def get_condition_embeddings(
-    args,
+    input_type: str,
+    device,
     autoencoder: Autoencoder,
     clip_model: CLIP,
     dataloader: DataLoader,
@@ -166,15 +172,15 @@ def get_condition_embeddings(
     with torch.no_grad():
         for i in range(0, n_embeddings_per_datum):
             for data in tqdm(dataloader):
-                image = data["images"].type(torch.FloatTensor).to(args.device)
+                image = data["images"].type(torch.FloatTensor).to(device)
 
-                if args.input_type == "Voxel":
-                    data_input = data["voxels"].type(torch.FloatTensor).to(args.device)
-                elif args.input_type == "Pointcloud":
+                if input_type == "Voxel":
+                    data_input = data["voxels"].type(torch.FloatTensor).to(device)
+                elif input_type == "Pointcloud":
                     data_input = (
                         data["pc_org"]
                         .type(torch.FloatTensor)
-                        .to(args.device)
+                        .to(device)
                         .transpose(-1, 1)
                     )
 
@@ -237,14 +243,14 @@ class LogPredictionSamplesCallback(Callback):
         voxel_size = 32
         shape = (voxel_size, voxel_size, voxel_size)
         p = make_3d_grid([-0.5] * 3, [+0.5] * 3, shape)
-        query_points = p.expand(num_figs, *p.size())
+        query_points = p.expand(num_figs, *p.size()).to(self.autoencoder.device)
 
         if batch_idx != 0:
             # We only want to generate prediction images on the first batch of the epoch
             return
 
         for text_in in self.text_query:
-            text = clip.tokenize([text_in])
+            text = clip.tokenize([text_in]).to(self.autoencoder.device)
             text_features = self.clip_model.encode_text(text)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
@@ -255,7 +261,7 @@ class LogPredictionSamplesCallback(Callback):
 
             out = self.autoencoder.decoding(decoder_embs, query_points)
 
-            if pl_module.output_type == "Implicit":
+            if self.output_type == "Implicit":
                 voxels_out = (
                     (
                         out.view(num_figs, voxel_size, voxel_size, voxel_size)
@@ -266,7 +272,7 @@ class LogPredictionSamplesCallback(Callback):
                     .numpy()
                 )
                 fig = multiple_plot_voxel(voxels_out)
-            elif pl_module.output_type == "Pointcloud":
+            elif self.output_type == "Pointcloud":
                 pred = out.detach().cpu().numpy()
                 fig = multiple_plot(pred)
 
@@ -344,6 +350,7 @@ def get_local_parser(mode="args"):
     parser.add_argument(
         "--num_views", type=int, default=5, metavar="N", help="Number of views"
     )
+
     parser.add_argument(
         "--clip_model_type",
         type=str,
@@ -354,6 +361,7 @@ def get_local_parser(mode="args"):
     parser.add_argument(
         "--optimizer", type=str, choices=("SGD", "Adam"), default="Adam"
     )
+    parser.add_argument("--epochs", type=int, default=300, help="Number of epochs")
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Dimension of embedding"
@@ -392,7 +400,7 @@ def main():
 
     wandb_logger = WandbLogger(
         project="clip_forge",
-        name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-autoencoder"),
+        name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-latent-flows"),
         log_model="all",
     )
     wandb_logger.experiment.config.update(args)
@@ -406,7 +414,7 @@ def main():
 
     # Loading networks
     # Load CLIP
-    args.device = "cuda" # TODO: Define this in a better way
+    args.device = "cuda"  # TODO: Define this in a better way
     args, clip_model = get_clip_model(args)
 
     # Load Autoencoder from checkpoint generated by train_autoencoder.py
@@ -414,8 +422,13 @@ def main():
     checkpoint = wandb_logger.use_artifact(args.autoencoder_checkpoint, "model")
     checkpoint_dir = checkpoint.download()
     checkpoint_path = os.path.join(checkpoint_dir, "model.ckpt")
+    # checkpoint_path = os.path.join(
+    #     "artifacts/model-clip-forge-autoencoder-2023-02-26-06-15-12-280-tpdwmj-algo-1:v151/model.ckpt"
+    # )
     print(f"Loading specified W&B autoencoder Checkpoint from {checkpoint_path}.")
-    net = Autoencoder.load_from_checkpoint(checkpoint_path).to(args.device) # TODO: Load device in a better way
+    net = Autoencoder.load_from_checkpoint(checkpoint_path).to(
+        args.device
+    )  # TODO: Load device in a better way
 
     # Load latent flow network
     if args.checkpoint is not None:
@@ -447,7 +460,12 @@ def main():
     # Generate TensorDatasets for Autoencoded shape embeddings and CLIP image embeddings
     logging.info("Getting train shape embeddings and condition embedding")
     train_dataset_new = get_condition_embeddings(
-        args, net, clip_model, train_dataloader, n_embeddings_per_datum=args.num_views
+        args.input_type,
+        args.device,
+        net,
+        clip_model,
+        train_dataloader,
+        n_embeddings_per_datum=args.num_views,
     )
     train_dataloader_new = DataLoader(
         train_dataset_new,
@@ -459,23 +477,31 @@ def main():
 
     logging.info("Getting val shape embeddings and condition embedding")
     val_dataset_new = get_condition_embeddings(
-        args, net, clip_model, val_dataloader, n_embeddings_per_datum=1
+        args.input_type,
+        args.device,
+        net,
+        clip_model,
+        val_dataloader,
+        n_embeddings_per_datum=1,
     )
     val_dataloader_new = DataLoader(
         val_dataset_new,
         batch_size=args.test_batch_size,
-        shuffle=True,
+        shuffle=False,
         num_workers=os.cpu_count() or 0,
         drop_last=False,
     )
     checkpoint_callback = ModelCheckpoint(
-        "/opt/ml/checkpoints",
+        # If we detect that we're in SageMaker training, use standard SageMaker
+        # checkpoint dir. Otherwise use standard PyTorch Lightning checkpoint
+        # directory.
+        "/opt/ml/checkpoints" if "SM_MODEL_DIR" in os.environ else None,
         monitor="Loss/val",
         mode="max",
         every_n_epochs=5,
         save_last=True,
     )
-    early_stop_callback = EarlyStopping(monitor="Loss/val", mode="max")
+    early_stop_callback = EarlyStopping(monitor="Loss/val", mode="min")
     sampling_callback = LogPredictionSamplesCallback(
         args.text_query, args.threshold, args.output_type, net, clip_model
     )
@@ -484,7 +510,7 @@ def main():
         logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stop_callback, sampling_callback],
         accelerator="gpu",
-        devices="1", # TODO
+        devices="1",  # TODO
         precision=16,
     )
 

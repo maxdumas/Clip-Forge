@@ -111,8 +111,9 @@ class CouplingLayer(nn.Module):
                 nn.init.orthogonal_(m.weight.data)
 
     def forward(self, inputs, cond_inputs=None, mode="direct"):
-        mask = self.mask
+        mask = self.mask.type_as(inputs)
 
+        # TODO: inputs is coming from cuda device, mask is on cpu. Why?
         masked_inputs = inputs * mask
         if cond_inputs is not None:
             masked_inputs = torch.cat([masked_inputs, cond_inputs], -1)
@@ -143,17 +144,21 @@ class FlowSequential(nn.Sequential):
         """
         self.num_inputs = inputs.size(-1)
 
+        device = inputs.device
+
         if logdets is None:
-            logdets = torch.zeros(inputs.size(0), 1, device=inputs.device)
+            logdets = torch.zeros(inputs.size(0), 1, device=device)
 
         assert mode in ["direct", "inverse"]
         if mode == "direct":
             for module in self._modules.values():
                 inputs, logdet = module(inputs, cond_inputs, mode)
+                inputs, logdet = inputs.to(device), logdet.to(device)
                 logdets += logdet
         else:
             for module in reversed(self._modules.values()):
                 inputs, logdet = module(inputs, cond_inputs, mode)
+                inputs, logdet = inputs.to(device), logdet.to(device)
                 logdets += logdet
 
         return inputs, logdets
@@ -169,7 +174,8 @@ class FlowSequential(nn.Sequential):
         if noise is None:
             noise = torch.Tensor(num_samples, self.num_inputs).normal_()
         if cond_inputs is not None:
-            cond_inputs = cond_inputs
+            # TODO: Hack to ensure all tensors are on the same device
+            noise = noise.type_as(cond_inputs)
         samples = self.forward(noise, cond_inputs, mode="inverse")[0]
         return samples
 
@@ -249,7 +255,8 @@ class LatentFlows(pl.LightningModule):
         # Add noise to improve robustness
         if self.noise == "add":
             train_embs = train_embs + 0.1 * torch.randn(
-                train_embs.size(0), self.num_inputs
+                train_embs.size(0), self.num_inputs,
+                device=self.device
             )
 
         # Run prediction

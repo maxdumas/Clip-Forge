@@ -10,6 +10,7 @@ exps/*
 wandb/
 clip_forge/
 lightning_logs/
+artifacts/
 
 .ipynb_checkpoints/
 nohup.out

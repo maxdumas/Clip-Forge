@@ -150,6 +150,8 @@ class VoxelsField(Field):
         complete = self.file_name in files
         return complete
 
+def to_rgb(image):
+    return image.convert("RGB")
 
 class ImagesField(Field):
     """Image Field.
@@ -184,7 +186,7 @@ class ImagesField(Field):
             [
                 Resize(n_px, interpolation=Image.BICUBIC),
                 CenterCrop(n_px),
-                lambda image: image.convert("RGB"),
+                to_rgb,
                 ToTensor(),
                 Normalize(
                     (0.48145466, 0.4578275, 0.40821073),
