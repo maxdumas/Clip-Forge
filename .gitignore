@@ -1,11 +1,15 @@
 __MACOSX
 .DS_Store
 
+.joblib_cache/
+.mypy_cache/
+
+# Experiment logging
 exps.zip
 exps/*
 wandb/
-
-dataset/ShapeNet/
+clip_forge/
+lightning_logs/
 
 .ipynb_checkpoints/
 nohup.out
