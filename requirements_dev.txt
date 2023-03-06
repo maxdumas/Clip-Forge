@@ -1,0 +1,11 @@
+# Tested on python=3.10
+
+torch
+torchvision
+torchaudio
+-r requirements.txt
+
+# Dev requirements
+mypy
+black
+pylint
