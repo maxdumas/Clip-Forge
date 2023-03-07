@@ -14,11 +14,11 @@
                 "--autoencoder_checkpoint", "maxdumas/clip_forge/model-clip-forge-autoencoder-2023-02-26-06-15-12-280-tpdwmj-algo-1:v151",
                 "--num_views", "1",
                 "--text_query", "a chair", "a limo", "a jet plane",
-                "--batch_size", "256",
-                "--test_batch_size", "256"
+                // "--batch_size", "256",
+                // "--test_batch_size", "256"
             ],
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": false
         }
     ]
 }

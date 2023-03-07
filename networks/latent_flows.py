@@ -250,7 +250,8 @@ class LatentFlows(pl.LightningModule):
 
     def training_step(self, data, batch_idx):
         # Load appropriate input data from the training set
-        train_embs, train_cond_embs = data
+        train_embs = data["train_embs"]
+        train_cond_embs = data["train_cond_embs"]
 
         # Add noise to improve robustness
         if self.noise == "add":
@@ -270,7 +271,8 @@ class LatentFlows(pl.LightningModule):
         return loss
 
     def validation_step(self, data, data_idx):
-        train_embs, train_cond_embs = data
+        train_embs = data["train_embs"]
+        train_cond_embs = data["train_cond_embs"]
 
         # Run prediction
         pred = self.forward(train_embs, train_cond_embs)
