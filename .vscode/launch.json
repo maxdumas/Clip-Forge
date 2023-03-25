@@ -5,6 +5,15 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python: train_autoencoder.py",
+            "type": "python",
+            "request": "launch",
+            "program": "train_autoencoder.py",
+            "args": ["--config", "autoencoder_params.yaml"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
             "name": "Python: train_post_clip.py",
             "type": "python",
             "request": "launch",

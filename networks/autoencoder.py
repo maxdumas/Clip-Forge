@@ -11,6 +11,9 @@ from .network_utils import ResnetBlockFC
 from utils.helper import get_optimizer_model
 from utils.visualization import make_3d_grid
 
+# TODO: Decouple this from this dataloader
+from dataset.buildingnet_dataset import BuildingNetDatum
+
 EPS = 1e-6
 
 
@@ -312,7 +315,7 @@ class Autoencoder(pl.LightningModule):
         # TODO: How do we parameterize this using LightningCLI?
         return torch.optim.Adam(self.parameters(), lr=self.lr)
 
-    def training_step(self, data, batch_idx):
+    def training_step(self, data: dict, batch_idx):
         # Load appropriate input data from the training set
         if self.input_type == "Voxel":
             data_input = data["voxels"]
@@ -322,7 +325,7 @@ class Autoencoder(pl.LightningModule):
         # Load appropriate output data from the training set
         if self.output_type == "Implicit":
             query_points = data["points"]
-            occ = data["points.occ"]
+            occ = data["points_occ"]
             gt = occ
         elif self.output_type == "Pointcloud":
             query_points = None
@@ -338,7 +341,7 @@ class Autoencoder(pl.LightningModule):
 
         return loss
 
-    def validation_step(self, data, data_idx):
+    def validation_step(self, data: dict, data_idx):
         if self.input_type == "Voxel":
             data_input = data["voxels"]
         elif self.input_type == "Pointcloud":

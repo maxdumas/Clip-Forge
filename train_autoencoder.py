@@ -1,6 +1,7 @@
 import io
 import os
 from typing import Any, Optional
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pytorch_lightning as pl
@@ -12,7 +13,7 @@ from pytorch_lightning.cli import LightningCLI, LightningArgumentParser
 from torch.utils.data import DataLoader
 
 import wandb
-from dataset import shapenet_dataset
+from dataset.buildingnet_dataset import BuildingNetDataset, Split
 from networks.autoencoder import Autoencoder
 from utils.visualization import multiple_plot_voxel, plot_real_pred
 
@@ -21,69 +22,38 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
     def __init__(
         self,
         dataset_name: str,
-        dataset_path: str,
-        categories: Optional[list[str]],
+        dataset_path: Path,
         batch_size: int = 32,
         test_batch_size: int = 32,
         num_points: int = 2025,
         num_sdf_points: int = 5000,
         test_num_sdf_points: int = 5000,
-        sampling_type: Optional[str] = None,
     ):
         super().__init__()
 
         assert (
-            dataset_name == "Shapenet"
-        ), "Only the ShapeNet dataset is currently supported."
+            dataset_name == "BuildingNet"
+        ), "Only the BuildingNet dataset is currently supported."
 
         self.dataset_path = dataset_path
         self.batch_size = batch_size
         self.test_batch_size = test_batch_size
-        self.categories = categories
         self.num_points = num_points
         self.num_sdf_points = num_sdf_points
         self.test_num_sdf_points = test_num_sdf_points
-        self.sampling_type = sampling_type
-
-        self.fields = {
-            "pointcloud": shapenet_dataset.PointCloudField("pointcloud.npz"),
-            "points": shapenet_dataset.PointsField("points.npz", unpackbits=True),
-            "voxels": shapenet_dataset.VoxelsField("model.binvox"),
-        }
 
     def setup(self, stage: str) -> None:
+        base_args = {
+            "dataset_root": self.dataset_path,
+            "num_sdf_points": self.num_sdf_points,
+            "num_pc_points": self.num_points,
+            "image_resolution": 224 # TODO: Avoid hardcoding this
+        }
         if stage == "fit":
-            self.train_dataset = shapenet_dataset.Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="train",
-                categories=self.categories,
-                no_except=True,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.num_sdf_points,
-            )
-            self.val_dataset = shapenet_dataset.Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="val",
-                categories=self.categories,
-                no_except=True,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.test_num_sdf_points,
-            )
+            self.train_dataset = BuildingNetDataset(**base_args, split=Split.TRAIN)
+            self.val_dataset = BuildingNetDataset(**base_args, split=Split.VAL)
         elif stage == "test":
-            self.test_dataset = shapenet_dataset.Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="test",
-                categories=self.categories,
-                no_except=True,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.test_num_sdf_points,
-            )
+            self.test_dataset = BuildingNetDataset(**base_args, split=Split.TEST)
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
@@ -119,9 +89,9 @@ class LogPredictionSamplesCallback(Callback):
         trainer,
         pl_module: Autoencoder,
         outputs: torch.Tensor,
-        batch,
-        batch_idx,
-        dataloader_idx,
+        batch: int,
+        batch_idx: int,
+        dataloader_idx = 0,
     ):
         """Called when the validation batch ends. This renders an image of the
         reconstructed model next to the original model to compare results."""
@@ -170,7 +140,8 @@ def main():
     torch.set_float32_matmul_precision("medium")
 
     checkpoint_callback = ModelCheckpoint(
-        "/opt/ml/checkpoints",
+        # TODO: Implement a better check that we are in SageMaker
+        "/opt/ml/checkpoints" if os.path.exists("/opt/ml") else None,
         monitor="Loss/val",
         mode="max",
         every_n_epochs=5,
@@ -216,6 +187,7 @@ def main():
     wandb_logger.watch(cli.model)
 
     cli.trainer.fit(cli.model, datamodule=cli.datamodule, ckpt_path=ckpt_path)
+
 
 if __name__ == "__main__":
     main()
