@@ -193,6 +193,7 @@ def main():
             f"Auto-loading existing SageMaker checkpoint from {ckpt_path}. Are we resuming after an interruption?"
         )
 
+    cli.model = torch.compile(cli.model)
     wandb_logger.watch(cli.model)
 
     cli.trainer.fit(cli.model, datamodule=cli.datamodule, ckpt_path=ckpt_path)
