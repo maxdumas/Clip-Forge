@@ -1,6 +1,5 @@
 import io
 import os
-from typing import Any, Optional
 from pathlib import Path
 import random
 
@@ -146,8 +145,6 @@ class AutoEncoderCLI(LightningCLI):
 
 
 def main():
-    torch.set_float32_matmul_precision("medium")
-
     checkpoint_callback = ModelCheckpoint(
         # TODO: Implement a better check that we are in SageMaker
         "/opt/ml/checkpoints" if os.path.exists("/opt/ml") else None,
@@ -156,7 +153,14 @@ def main():
         every_n_epochs=5,
         save_last=True,
     )
-    early_stop_callback = EarlyStopping(monitor="Loss/val", mode="max")
+    early_stop_callback = EarlyStopping(
+        monitor="Loss/val",
+        mode="max",
+        patience=50,
+        stopping_threshold=1.0,
+        divergence_threshold=0.01,
+        verbose=True,
+    )
     sampling_callback = LogPredictionSamplesCallback()
     cli = AutoEncoderCLI(
         Autoencoder,
@@ -169,9 +173,9 @@ def main():
     )
 
     wandb_logger = WandbLogger(
-        project="clip_forge",
-        name=os.environ.get("TRAINING_JOB_NAME", "clip-forge-autoencoder"),
-        log_model="all",
+        project="clip_forge_autoencoder",
+        name=os.environ.get("TRAINING_JOB_NAME", None),
+        log_model=True,
     )
     cli.trainer.logger = wandb_logger
     wandb_logger.log_hyperparams(cli.config)
