@@ -1,18 +1,14 @@
-from typing import Union, Literal
-
 import numpy as np
+import pytorch_lightning as pl
 import torch
-from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
-import pytorch_lightning as pl
+from torch import Tensor
 
-from .network_utils import ResnetBlockFC
-from utils.helper import get_optimizer_model
 from utils.visualization import make_3d_grid
 
-# TODO: Decouple this from this dataloader
-from dataset.buildingnet_dataset import BuildingNetDatum
+from utils.helper import InputType, OutputType
+from .network_utils import ResnetBlockFC
 
 EPS = 1e-6
 
@@ -244,7 +240,6 @@ def compute_iou(occ1: Tensor, occ2: Tensor):
 
     return iou
 
-
 class Autoencoder(pl.LightningModule):
     encoder: nn.Module
     decoder: nn.Module
@@ -256,8 +251,8 @@ class Autoencoder(pl.LightningModule):
         lr: float = 0.0001,
         num_points: int = 2025,
         emb_dims: int = 128,
-        input_type: str = "Voxel",
-        output_type: str = "Implicit",
+        input_type: InputType = InputType.VOXELS,
+        output_type: OutputType = OutputType.IMPLICIT,
         threshold: float = 0.05,
     ):
         super().__init__()
@@ -271,40 +266,36 @@ class Autoencoder(pl.LightningModule):
         self.threshold = threshold
 
         ### Sub-Network def
-        if self.input_type == "Voxel":
-            self.encoder = VoxelEncoderBN(
-                dim=3, c_dim=emb_dims, last_feature_transform="add_noise"
-            )
-        elif self.input_type == "Pointcloud":
-            self.encoder = PointNet(
-                pc_dims=1024, c_dim=emb_dims, last_feature_transform="add_noise"
-            )
-        else:
-            raise ValueError("The input representation is not implemented")
+        match self.input_type:
+            case InputType.VOXELS:
+                self.encoder = VoxelEncoderBN(
+                    dim=3, c_dim=emb_dims, last_feature_transform="add_noise"
+                )
+            case InputType.POINTCLOUD:
+                self.encoder = PointNet(
+                    pc_dims=1024, c_dim=emb_dims, last_feature_transform="add_noise"
+                )
 
-        if self.output_type == "Implicit":
-            self.decoder = Occ_Simple_Decoder(z_dim=emb_dims)
-        elif self.output_type == "Pointcloud":
-            self.decoder = Foldingnet_decoder(num_points=num_points, z_dim=emb_dims)
-        else:
-            raise ValueError("The output representation is not implemented")
+        match self.output_type:
+            case OutputType.IMPLICIT:
+                self.decoder = Occ_Simple_Decoder(z_dim=emb_dims)
+            case OutputType.POINTCLOUD:
+                self.decoder = Foldingnet_decoder(num_points=num_points, z_dim=emb_dims)
 
     def decoding(self, shape_embedding, points=None):
-        if self.output_type == "Implicit":
-            return self.decoder(points, shape_embedding)
-        elif self.output_type == "Pointcloud":
-            return self.decoder(shape_embedding)
-        else:
-            raise ValueError("The output representation is not implemented")
+        match self.output_type:
+            case OutputType.IMPLICIT:
+                return self.decoder(points, shape_embedding)
+            case OutputType.POINTCLOUD:
+                return self.decoder(shape_embedding)
 
     def reconstruction_loss(self, pred: Tensor, gt: Tensor) -> Tensor:
-        if self.output_type == "Implicit":
-            return torch.mean((pred.squeeze(-1) - gt) ** 2)
-        elif self.output_type == "Pointcloud":
-            dl, dr = dist_chamfer(gt, pred)
-            return (dl.mean(dim=1) + dr.mean(dim=1)).mean()
-        else:
-            raise ValueError("The output representation is not implemented")
+        match self.output_type:
+            case OutputType.IMPLICIT:
+                return torch.mean((pred.squeeze(-1) - gt) ** 2)
+            case OutputType.POINTCLOUD:
+                dl, dr = dist_chamfer(gt, pred)
+                return (dl.mean(dim=1) + dr.mean(dim=1)).mean()
 
     def forward(self, data_input, query_points=None) -> tuple[Tensor, Tensor]:
         shape_embs = self.encoder(data_input)
@@ -317,19 +308,21 @@ class Autoencoder(pl.LightningModule):
 
     def training_step(self, data: dict, batch_idx):
         # Load appropriate input data from the training set
-        if self.input_type == "Voxel":
-            data_input = data["voxels"]
-        elif self.input_type == "Pointcloud":
-            data_input = data["pc_org"].transpose(-1, 1)
+        match self.input_type:
+            case InputType.VOXELS:
+                data_input = data["voxels"]
+            case InputType.POINTCLOUD:
+                data_input = data["pc_org"].transpose(-1, 1)
 
         # Load appropriate output data from the training set
-        if self.output_type == "Implicit":
-            query_points = data["points"]
-            occ = data["points_occ"]
-            gt = occ
-        elif self.output_type == "Pointcloud":
-            query_points = None
-            gt = data["pc_org"]
+        match self.output_type:
+            case OutputType.IMPLICIT:
+                query_points = data["points"]
+                occ = data["points_occ"]
+                gt = occ
+            case OutputType.POINTCLOUD:
+                query_points = None
+                gt = data["pc_org"]
 
         # Run prediction
         pred, _ = self.forward(data_input, query_points)
@@ -342,41 +335,43 @@ class Autoencoder(pl.LightningModule):
         return loss
 
     def validation_step(self, data: dict, data_idx):
-        if self.input_type == "Voxel":
-            data_input = data["voxels"]
-        elif self.input_type == "Pointcloud":
-            data_input = data["pc_org"].transpose(-1, 1)
+        match self.input_type:
+            case InputType.VOXELS:
+                data_input = data["voxels"]
+            case InputType.POINTCLOUD:
+                data_input = data["pc_org"].transpose(-1, 1)
 
-        if self.output_type == "Implicit":
-            # Compute IOU loss for Implicit representation
-            points_voxels = make_3d_grid(
-                (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
-            ).to(
-                self.device
-            )  # TODO: Do this in the correct way
-            query_points = points_voxels.expand(
-                self.test_batch_size, *points_voxels.size()
-            )
-
-            if self.test_batch_size != data_input.size(0):
+        match self.output_type:
+            case OutputType.IMPLICIT:
+                # Compute IOU loss for Implicit representation
+                points_voxels = make_3d_grid(
+                    (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
+                ).to(
+                    self.device
+                )  # TODO: Do this in the correct way
                 query_points = points_voxels.expand(
-                    data_input.size(0), *points_voxels.size()
+                    self.test_batch_size, *points_voxels.size()
                 )
 
-            # Run prediction
-            pred, _ = self.forward(data_input, query_points)
+                if self.test_batch_size != data_input.size(0):
+                    query_points = points_voxels.expand(
+                        data_input.size(0), *points_voxels.size()
+                    )
 
-            # Compute reconstruction loss
-            voxels_occ_np = data["voxels"] >= 0.5
-            occ_hat_np = pred >= self.threshold
-            iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
-            loss = iou_voxels.item()
-        elif self.output_type == "Pointcloud":
-            query_points = None
-            gt = data["pc_org"]
+                # Run prediction
+                pred, _ = self.forward(data_input, query_points)
 
-            pred, _ = self.forward(data_input, query_points)
-            loss = self.reconstruction_loss(pred, gt)
+                # Compute reconstruction loss
+                voxels_occ_np = data["voxels"] >= 0.5
+                occ_hat_np = pred >= self.threshold
+                iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
+                loss = iou_voxels.item()
+            case OutputType.POINTCLOUD:
+                query_points = None
+                gt = data["pc_org"]
+
+                pred, _ = self.forward(data_input, query_points)
+                loss = self.reconstruction_loss(pred, gt)
 
         self.log("Loss/val", loss)
 

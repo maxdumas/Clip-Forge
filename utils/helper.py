@@ -1,3 +1,4 @@
+from enum import Enum
 import logging
 import os
 import os.path as osp
@@ -7,6 +8,16 @@ import sys
 import numpy as np
 import torch
 from torch import optim
+
+
+class InputType(str, Enum):
+    VOXELS = "Voxel"
+    POINTCLOUD = "Pointcloud"
+
+
+class OutputType(str, Enum):
+    IMPLICIT = "Implicit"
+    POINTCLOUD = "Pointcloud"
 
 
 def setup_logging(filename: str, level_str: str, filemode: str):

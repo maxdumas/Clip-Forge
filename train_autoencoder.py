@@ -2,6 +2,7 @@ import io
 import os
 from typing import Any, Optional
 from pathlib import Path
+import random
 
 import matplotlib.pyplot as plt
 import pytorch_lightning as pl
@@ -16,6 +17,7 @@ import wandb
 from dataset.buildingnet_dataset import BuildingNetDataset, Split
 from networks.autoencoder import Autoencoder
 from utils.visualization import multiple_plot_voxel, plot_real_pred
+from utils.helper import OutputType
 
 
 class AutoencoderShapeNetDataModule(pl.LightningDataModule):
@@ -47,7 +49,7 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
             "dataset_root": self.dataset_path,
             "num_sdf_points": self.num_sdf_points,
             "num_pc_points": self.num_points,
-            "image_resolution": 224 # TODO: Avoid hardcoding this
+            "image_resolution": 224,  # TODO: Avoid hardcoding this
         }
         if stage == "fit":
             self.train_dataset = BuildingNetDataset(**base_args, split=Split.TRAIN)
@@ -84,47 +86,54 @@ class AutoencoderShapeNetDataModule(pl.LightningDataModule):
 
 
 class LogPredictionSamplesCallback(Callback):
+    batch_sample_indices = set(random.choices(list(range(32)), k=4))
+    
     def on_validation_batch_end(
         self,
         trainer,
         pl_module: Autoencoder,
         outputs: torch.Tensor,
-        batch: int,
+        batch: dict,
         batch_idx: int,
-        dataloader_idx = 0,
+        dataloader_idx=0,
     ):
         """Called when the validation batch ends. This renders an image of the
         reconstructed model next to the original model to compare results."""
 
-        if batch_idx != 0:
-            # We only want to generate prediction images on the first batch of the epoch
+        if batch_idx in self.batch_sample_indices:
+            # We only want to generate prediction images on the first few batches in the epoch
             return
 
-        if pl_module.output_type == "Implicit":
-            voxel_32 = batch["voxels"].type(torch.FloatTensor)
-            voxel_size = 32
+        def generate_plot_image(outputs):
+            match pl_module.output_type:
+                case OutputType.IMPLICIT:
+                    voxel_32 = batch["voxels"].type(torch.FloatTensor)
+                    voxel_size = 32
 
-            voxels_out = (
-                (
-                    outputs[0].view(voxel_size, voxel_size, voxel_size)
-                    > pl_module.threshold
-                )
-                .cpu()
-                .numpy()
-            )
-            real = voxel_32[0].cpu().numpy()
-            fig = multiple_plot_voxel([real, voxels_out])
-        elif pl_module.output_type == "Pointcloud":
-            gt = batch["pc_org"].type(torch.FloatTensor)
+                    voxels_out = (
+                        (
+                            outputs[0].view(voxel_size, voxel_size, voxel_size)
+                            > pl_module.threshold
+                        )
+                        .cpu()
+                        .numpy()
+                    )
+                    real = voxel_32[0].cpu().numpy()
+                    fig = multiple_plot_voxel([real, voxels_out])
+                case OutputType.POINTCLOUD:
+                    gt = batch["pc_org"].type(torch.FloatTensor)
 
-            fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
+                    fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
 
-        buf = io.BytesIO()
-        fig.savefig(buf)
-        buf.seek(0)
-        im = Image.open(buf)
-        trainer.logger.experiment.log({"samples": [wandb.Image(im)]})
-        plt.close(fig)
+            with io.BytesIO() as buf:
+                fig.savefig(buf)
+                buf.seek(0)
+                im = Image.open(buf)
+                plt.close(fig)
+                return wandb.Image(im)
+
+        fixed_im = generate_plot_image(outputs)
+        trainer.logger.experiment.log({f"samples_{batch_idx}": [fixed_im]})
 
 
 class AutoEncoderCLI(LightningCLI):
