@@ -1,92 +1,24 @@
 import io
 import os
-from pathlib import Path
 import random
 
 import matplotlib.pyplot as plt
-import pytorch_lightning as pl
 import torch
 from PIL import Image
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers.wandb import WandbLogger
 from pytorch_lightning.cli import LightningCLI, LightningArgumentParser
-from torch.utils.data import DataLoader
 
 import wandb
-from dataset.buildingnet_dataset import BuildingNetDataset, Split
 from networks.autoencoder import Autoencoder
 from utils.visualization import multiple_plot_voxel, plot_real_pred
 from utils.helper import OutputType
-
-
-class AutoencoderShapeNetDataModule(pl.LightningDataModule):
-    def __init__(
-        self,
-        dataset_name: str,
-        dataset_path: Path,
-        batch_size: int = 32,
-        test_batch_size: int = 32,
-        num_points: int = 2025,
-        num_sdf_points: int = 5000,
-        test_num_sdf_points: int = 5000,
-    ):
-        super().__init__()
-
-        assert (
-            dataset_name == "BuildingNet"
-        ), "Only the BuildingNet dataset is currently supported."
-
-        self.dataset_path = dataset_path
-        self.batch_size = batch_size
-        self.test_batch_size = test_batch_size
-        self.num_points = num_points
-        self.num_sdf_points = num_sdf_points
-        self.test_num_sdf_points = test_num_sdf_points
-
-    def setup(self, stage: str) -> None:
-        base_args = {
-            "dataset_root": self.dataset_path,
-            "num_sdf_points": self.num_sdf_points,
-            "num_pc_points": self.num_points,
-            "image_resolution": 224,  # TODO: Avoid hardcoding this
-        }
-        if stage == "fit":
-            self.train_dataset = BuildingNetDataset(**base_args, split=Split.TRAIN)
-            self.val_dataset = BuildingNetDataset(**base_args, split=Split.VAL)
-        elif stage == "test":
-            self.test_dataset = BuildingNetDataset(**base_args, split=Split.TEST)
-
-    def train_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            drop_last=True,
-            num_workers=os.cpu_count() or 0,
-        )
-
-    def val_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.test_batch_size,
-            shuffle=False,
-            drop_last=False,
-            num_workers=os.cpu_count() or 0,
-        )
-
-    def test_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.test_dataset,
-            batch_size=self.test_batch_size,
-            shuffle=False,
-            drop_last=False,
-            num_workers=os.cpu_count() or 0,
-        )
+from dataset.datamodule import BuildingNetDataModule
 
 
 class LogPredictionSamplesCallback(Callback):
     batch_sample_indices = set(random.choices(list(range(32)), k=4))
-    
+
     def on_validation_batch_end(
         self,
         trainer,
@@ -164,7 +96,7 @@ def main():
     sampling_callback = LogPredictionSamplesCallback()
     cli = AutoEncoderCLI(
         Autoencoder,
-        AutoencoderShapeNetDataModule,
+        BuildingNetDataModule,
         trainer_defaults={
             "callbacks": [checkpoint_callback, early_stop_callback, sampling_callback]
         },

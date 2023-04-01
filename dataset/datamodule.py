@@ -1,115 +1,85 @@
-from typing import Optional
 import os
+from pathlib import Path
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
+import torch
 
-from .shapenet_dataset import (
-    Shapes3dDataset,
-    ImagesField,
-    PointsField,
-    VoxelsField,
-    PointCloudField,
-)
+from dataset.buildingnet_dataset import BuildingNetDataset, Split
 
-class ShapeNetDataModule(pl.LightningDataModule):
+
+class BuildingNetDataModule(pl.LightningDataModule):
+    train_dataset: BuildingNetDataset | None = None
+    val_dataset: BuildingNetDataset | None = None
+    test_dataset: BuildingNetDataset | None = None
+
     def __init__(
         self,
         dataset_name: str,
-        dataset_path: Optional[str] = os.environ.get("SM_CHANNEL_TRAIN"),
-        categories: Optional[list[str]] = None,
+        dataset_path: Path,
         batch_size: int = 32,
         test_batch_size: int = 32,
         num_points: int = 2025,
         num_sdf_points: int = 5000,
         test_num_sdf_points: int = 5000,
-        use_image_res: Optional[int] = None,
-        collate_fn=None,
-    ) -> None:
+        image_resolution: int = 224,
+    ):
         super().__init__()
-        assert (
-            dataset_name == "ShapeNet"
-        ), "Only the ShapeNet dataset is currently supported."
 
         assert (
-            dataset_path is not None
-        ), "Dataset path was not provided and could not be initialized from the environment."
+            dataset_name == "BuildingNet"
+        ), "Only the BuildingNet dataset is currently supported."
 
         self.dataset_path = dataset_path
         self.batch_size = batch_size
         self.test_batch_size = test_batch_size
-        self.categories = categories
         self.num_points = num_points
         self.num_sdf_points = num_sdf_points
         self.test_num_sdf_points = test_num_sdf_points
-        self.collate_fn = collate_fn
-        self.fields = {
-            "pointcloud": PointCloudField("pointcloud.npz"),
-            "points": PointsField("points.npz", unpackbits=True),
-            "voxels": VoxelsField("model.binvox"),
-        }
-
-        if use_image_res:
-            self.fields["images"] = ImagesField("img_choy2016", n_px=use_image_res)
-
+        self.image_resolution = image_resolution
 
     def setup(self, stage: str) -> None:
+        base_args = {
+            "dataset_root": self.dataset_path,
+            "num_sdf_points": self.num_sdf_points,
+            "num_pc_points": self.num_points,
+            "image_resolution": self.image_resolution,
+        }
         if stage == "fit":
-            self.train_dataset = Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="train",
-                categories=self.categories,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.num_sdf_points,
-            )
-            self.val_dataset = Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="val",
-                categories=self.categories,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.test_num_sdf_points,
-            )
+            self.train_dataset = BuildingNetDataset(**base_args, split=Split.TRAIN)
+            self.val_dataset = BuildingNetDataset(**base_args, split=Split.VAL)
         elif stage == "test":
-            self.test_dataset = Shapes3dDataset(
-                self.dataset_path,
-                self.fields,
-                split="test",
-                categories=self.categories,
-                transform=None,
-                num_points=self.num_points,
-                num_sdf_points=self.test_num_sdf_points,
-            )
+            self.test_dataset = BuildingNetDataset(**base_args, split=Split.TEST)
 
     def train_dataloader(self) -> DataLoader:
+        assert self.train_dataset is not None
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
-            collate_fn=self.collate_fn,
             num_workers=os.cpu_count() or 0,
+            pin_memory=torch.cuda.is_available(),
         )
 
     def val_dataloader(self) -> DataLoader:
+        assert self.val_dataset is not None
         return DataLoader(
             self.val_dataset,
             batch_size=self.test_batch_size,
             shuffle=False,
             drop_last=False,
-            collate_fn=self.collate_fn,
             num_workers=os.cpu_count() or 0,
+            pin_memory=torch.cuda.is_available(),
         )
 
     def test_dataloader(self) -> DataLoader:
+        assert self.test_dataset is not None
         return DataLoader(
             self.test_dataset,
             batch_size=self.test_batch_size,
             shuffle=False,
             drop_last=False,
-            collate_fn=self.collate_fn,
             num_workers=os.cpu_count() or 0,
+            pin_memory=torch.cuda.is_available(),
         )

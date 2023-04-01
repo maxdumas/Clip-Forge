@@ -28,7 +28,7 @@ trainer:
   # 16bit mixed precision (16, '16', '16-mixed') or bfloat16 mixed precision ('bf16', 'bf16-mixed').
   # Can be used on CPU, GPU, TPUs, HPUs or IPUs.
   # Default: ``'32-true'``. (type: Union[Literal[64, 32, 16], Literal['16-mixed', 'bf16-mixed', '32-true', '64-true'], Literal['64', '32', '16', 'bf16']], default: 32-true)
-  precision: 16
+  precision: 16-mixed
 
   # Logger (or iterable collection of loggers) for experiment tracking. A ``True`` value uses
   # the default ``TensorBoardLogger`` if it is installed, otherwise ``CSVLogger``.
@@ -49,7 +49,7 @@ trainer:
   # Stop training once this number of epochs is reached. Disabled by default (None).
   # If both max_epochs and max_steps are not specified, defaults to ``max_epochs = 1000``.
   # To enable infinite training, set ``max_epochs = -1``. (type: Optional[int], default: null)
-  max_epochs:
+  max_epochs: 2000
 
   # Force training for at least these many epochs. Disabled by default (None). (type: Optional[int], default: null)
   min_epochs:
@@ -216,19 +216,19 @@ model:
   test_batch_size: 32
 
   #   (type: float, default: 0.0001)
-  lr: 0.0001
+  lr: 0.001
 
   #   (type: int, default: 2025)
   num_points: 2025
 
   #   (type: int, default: 128)
-  emb_dims: 128
+  emb_dims: 256
 
-  #   (type: str, default: Voxel)
-  input_type: Voxel
+  #   (type: str, default: VOXELS)
+  input_type: VOXELS
 
-  #   (type: str, default: Implicit)
-  output_type: Implicit
+  #   (type: str, default: IMPLICIT)
+  output_type: IMPLICIT
 
   #   (type: float, default: 0.05)
   threshold: 0.05
@@ -249,4 +249,4 @@ data:
   test_num_sdf_points: 5000
 
 #   (type: str, default: null)
-# ckpt_path: null
+ckpt_path: maxdumas/clip_forge/model-r6wk8opt:v1

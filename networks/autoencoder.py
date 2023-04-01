@@ -250,12 +250,13 @@ class Autoencoder(pl.LightningModule):
         test_batch_size: int = 32,
         lr: float = 0.0001,
         num_points: int = 2025,
-        emb_dims: int = 128,
+        emb_dims: int = 256,
         input_type: InputType = InputType.VOXELS,
         output_type: OutputType = OutputType.IMPLICIT,
         threshold: float = 0.05,
     ):
         super().__init__()
+        self.save_hyperparameters()
         ### Local Model Hyperparameters
         self.lr = lr
         self.batch_size = batch_size
