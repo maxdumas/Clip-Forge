@@ -5,29 +5,44 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: train_autoencoder.py",
+            "name": "train_autoencoder.py fit",
             "type": "python",
             "request": "launch",
             "program": "train_autoencoder.py",
-            "args": ["--config", "autoencoder_params.yaml"],
+            "args": ["fit", "--config", "autoencoder_params.yaml"],
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": false
         },
         {
-            "name": "Python: train_post_clip.py",
+            "name": "train_autoencoder.py predict",
+            "type": "python",
+            "request": "launch",
+            "program": "train_autoencoder.py",
+            "args": ["predict",
+                "--ckpt_path", "maxdumas/model-registry/clip_forge_autoencoder:v0",
+                "--data.dataset_name", "BuildingNet",
+                "--data.dataset_path", "../text2building_data/citydata/buildingnet/"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "train_post_clip.py",
             "type": "python",
             "request": "launch",
             "program": "train_post_clip.py",
             "args": [
-                "--dataset_path", "../shapenet",
-                "--autoencoder_checkpoint", "maxdumas/clip_forge/model-clip-forge-autoencoder-2023-02-26-06-15-12-280-tpdwmj-algo-1:v151",
+                "--dataset_name", "BuildingNet",
+                "--dataset_path", "../text2building_data/citydata/buildingnet",
+                "--autoencoder_checkpoint", "maxdumas/model-registry/clip_forge_autoencoder:v0",
                 "--num_views", "1",
                 "--text_query", "a chair", "a limo", "a jet plane",
                 "--batch_size", "256",
-                "--test_batch_size", "256"
+                "--test_batch_size", "256",
+                "--emb_dims", "256"
             ],
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": false
         }
     ]
 }

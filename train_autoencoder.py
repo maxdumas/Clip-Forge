@@ -5,6 +5,7 @@ import random
 import matplotlib.pyplot as plt
 import torch
 from PIL import Image
+from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers.wandb import WandbLogger
 from pytorch_lightning.cli import LightningCLI, LightningArgumentParser
@@ -17,11 +18,75 @@ from dataset.datamodule import BuildingNetDataModule
 
 
 class LogPredictionSamplesCallback(Callback):
-    batch_sample_indices = set(random.choices(list(range(32)), k=4))
+    # TODO: Intelligently determine this based on the validation batch size
+    batch_sample_indices = set(random.sample(range(6), k=4))
+
+    def generate_plot_image(self, pl_module: Autoencoder, outputs, batch: dict):
+        match pl_module.output_type:
+            case OutputType.IMPLICIT:
+                voxel_32 = batch["voxels"].type(torch.FloatTensor)
+                voxel_size = 32
+
+                voxels_out = (
+                    (
+                        outputs[0].view(voxel_size, voxel_size, voxel_size)
+                        > pl_module.threshold
+                    )
+                    .cpu()
+                    .numpy()
+                )
+                real = voxel_32[0].cpu().numpy()
+                fig = multiple_plot_voxel([real, voxels_out])
+            case OutputType.POINTCLOUD:
+                gt = batch["pc_org"].type(torch.FloatTensor)
+
+                fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
+
+        with io.BytesIO() as buf:
+            fig.savefig(buf)
+            buf.seek(0)
+            im = Image.open(buf)
+            plt.close(fig)
+            return wandb.Image(im)
+
+    # def on_train_batch_end(
+    #     self,
+    #     trainer: Trainer,
+    #     pl_module: Autoencoder,
+    #     outputs, # This is just the training loss
+    #     batch: dict,
+    #     batch_idx: int,
+    # ) -> None:
+    #     # Only sample training images every 10 epochs and for a random selection of batches in the epoch.
+    #     if (
+    #         trainer.current_epoch % 10 != 0
+    #         or batch_idx not in self.batch_sample_indices
+    #     ):
+    #         return
+
+    #     points_voxels = make_3d_grid(
+    #         (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
+    #     ).to(
+    #         pl_module.device
+    #     )  # TODO: Do this in the correct way
+    #     query_points = points_voxels.expand(
+    #         pl_module.test_batch_size, *points_voxels.size()
+    #     )
+
+    #     if pl_module.test_batch_size != data_input.size(0):
+    #         query_points = points_voxels.expand(
+    #             data_input.size(0), *points_voxels.size()
+    #         )
+
+    #     # Run prediction
+    #     outputs, _ = pl_module.forward(data_input, query_points)
+
+    #     fixed_im = self.generate_plot_image(pl_module, outputs, batch)
+    #     trainer.logger.experiment.log({f"samples/train_{batch_idx}": [fixed_im]})
 
     def on_validation_batch_end(
         self,
-        trainer,
+        trainer: Trainer,
         pl_module: Autoencoder,
         outputs: torch.Tensor,
         batch: dict,
@@ -31,40 +96,15 @@ class LogPredictionSamplesCallback(Callback):
         """Called when the validation batch ends. This renders an image of the
         reconstructed model next to the original model to compare results."""
 
-        if batch_idx in self.batch_sample_indices:
-            # We only want to generate prediction images on the first few batches in the epoch
+        # Only sample validation images every N epochs for a random selection of batches in the epoch.
+        if (
+            trainer.current_epoch % 10 != 0
+            or batch_idx not in self.batch_sample_indices
+        ):
             return
 
-        def generate_plot_image(outputs):
-            match pl_module.output_type:
-                case OutputType.IMPLICIT:
-                    voxel_32 = batch["voxels"].type(torch.FloatTensor)
-                    voxel_size = 32
-
-                    voxels_out = (
-                        (
-                            outputs[0].view(voxel_size, voxel_size, voxel_size)
-                            > pl_module.threshold
-                        )
-                        .cpu()
-                        .numpy()
-                    )
-                    real = voxel_32[0].cpu().numpy()
-                    fig = multiple_plot_voxel([real, voxels_out])
-                case OutputType.POINTCLOUD:
-                    gt = batch["pc_org"].type(torch.FloatTensor)
-
-                    fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
-
-            with io.BytesIO() as buf:
-                fig.savefig(buf)
-                buf.seek(0)
-                im = Image.open(buf)
-                plt.close(fig)
-                return wandb.Image(im)
-
-        fixed_im = generate_plot_image(outputs)
-        trainer.logger.experiment.log({f"samples_{batch_idx}": [fixed_im]})
+        fixed_im = self.generate_plot_image(pl_module, outputs, batch)
+        trainer.logger.experiment.log({f"samples/val_{batch_idx}": [fixed_im]})
 
 
 class AutoEncoderCLI(LightningCLI):
@@ -121,17 +161,17 @@ def main():
     checkpoint_callback = ModelCheckpoint(
         # TODO: Implement a better check that we are in SageMaker
         "/opt/ml/checkpoints" if os.path.exists("/opt/ml") else None,
-        monitor="Loss/val",
+        monitor="loss/val/iou",
         mode="max",
         every_n_epochs=5,
         save_last=True,
     )
     early_stop_callback = EarlyStopping(
-        monitor="Loss/val",
+        monitor="loss/val/iou",
         mode="max",
         patience=50,
         stopping_threshold=1.0,
-        divergence_threshold=0.01,
+        # divergence_threshold=0.01,
         verbose=True,
     )
     sampling_callback = LogPredictionSamplesCallback()

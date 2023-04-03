@@ -331,7 +331,7 @@ class Autoencoder(pl.LightningModule):
         # Compute reconstruction loss
         loss = self.reconstruction_loss(pred, gt)
 
-        self.log("Loss/train", loss)
+        self.log("loss/train/reconstruction", loss)
 
         return loss
 
@@ -344,6 +344,15 @@ class Autoencoder(pl.LightningModule):
 
         match self.output_type:
             case OutputType.IMPLICIT:
+                # Compute reconstruction loss
+                query_points = data["points"]
+                occ = data["points_occ"]
+                gt = occ
+                pred, _ = self.forward(data_input, query_points)
+
+                loss = self.reconstruction_loss(pred, gt)
+                self.log("loss/val/reconstruction", loss)
+
                 # Compute IOU loss for Implicit representation
                 points_voxels = make_3d_grid(
                     (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
@@ -362,11 +371,11 @@ class Autoencoder(pl.LightningModule):
                 # Run prediction
                 pred, _ = self.forward(data_input, query_points)
 
-                # Compute reconstruction loss
                 voxels_occ_np = data["voxels"] >= 0.5
                 occ_hat_np = pred >= self.threshold
                 iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
                 loss = iou_voxels.item()
+                self.log("loss/val/iou", loss)
             case OutputType.POINTCLOUD:
                 query_points = None
                 gt = data["pc_org"]
@@ -374,6 +383,6 @@ class Autoencoder(pl.LightningModule):
                 pred, _ = self.forward(data_input, query_points)
                 loss = self.reconstruction_loss(pred, gt)
 
-        self.log("Loss/val", loss)
+                self.log("loss/val/reconstruction", loss)
 
         return pred
