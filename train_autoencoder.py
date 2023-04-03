@@ -73,7 +73,48 @@ class AutoEncoderCLI(LightningCLI):
         parser.link_arguments("model.test_batch_size", "data.test_batch_size")
         parser.link_arguments("model.num_points", "data.num_points")
 
-        parser.add_argument("--ckpt_path", type=str, default=None)
+        # parser.add_argument("--ckpt_path", type=str, default=None)
+
+    def search_for_checkpoints(self, wandb_logger: WandbLogger):
+        ckpt_path = self.config_init[self.subcommand].ckpt_path
+        sm_ckpt_path = os.path.join("/opt/ml/checkpoints", "last.ckpt")
+        if ckpt_path is not None:
+            # If a checkpoint name is explicitly provided, load that checkpoint from W&B
+            checkpoint = wandb_logger.use_artifact(ckpt_path, "model")
+            checkpoint_dir = checkpoint.download()
+            ckpt_path = os.path.join(checkpoint_dir, "model.ckpt")
+            print(f"Loading specified W&B Checkpoint from {ckpt_path}.")
+        elif os.path.exists(sm_ckpt_path):
+            # Restore any checkpoint present in /opt/ml/checkpoints, as this
+            # represents a checkpoint that was pre-loaded from SageMaker. We need to
+            # do this in order to be able to use Spot training, as we need this
+            # script to be able to automatically recover after being interrupted.
+            ckpt_path = sm_ckpt_path
+            print(
+                f"Auto-loading existing SageMaker checkpoint from {ckpt_path}. Are we resuming after an interruption?"
+            )
+        self.config_init[self.subcommand].ckpt_path = ckpt_path
+
+    def instantiate_classes(self) -> None:
+        """Instantiates the classes and sets their attributes."""
+        wandb_logger = WandbLogger(
+            project="clip_forge_autoencoder",
+            name=os.environ.get("TRAINING_JOB_NAME", None),
+            log_model=True,
+        )
+
+        self.config_init = self.parser.instantiate_classes(self.config)
+        self.datamodule = self._get(self.config_init, "data")
+        self._add_configure_optimizers_method_to_model(self.subcommand)
+        self.trainer = self.instantiate_trainer()
+        self.trainer.logger = wandb_logger
+        wandb_logger.log_hyperparams(self.config)
+
+        self.search_for_checkpoints(wandb_logger)
+
+        self.model = self._get(self.config_init, "model")
+        # self.model = torch.compile(self.model)
+        wandb_logger.watch(self.model)
 
 
 def main():
@@ -94,45 +135,15 @@ def main():
         verbose=True,
     )
     sampling_callback = LogPredictionSamplesCallback()
-    cli = AutoEncoderCLI(
+
+    AutoEncoderCLI(
         Autoencoder,
         BuildingNetDataModule,
         trainer_defaults={
             "callbacks": [checkpoint_callback, early_stop_callback, sampling_callback]
         },
-        run=False,
         save_config_callback=None,
     )
-
-    wandb_logger = WandbLogger(
-        project="clip_forge_autoencoder",
-        name=os.environ.get("TRAINING_JOB_NAME", None),
-        log_model=True,
-    )
-    cli.trainer.logger = wandb_logger
-    wandb_logger.log_hyperparams(cli.config)
-
-    ckpt_path = cli.config.ckpt_path
-    if ckpt_path is not None:
-        # If a checkpoint name is explicitly provided, load that checkpoint from W&B
-        checkpoint = wandb_logger.use_artifact(ckpt_path, "model")
-        checkpoint_dir = checkpoint.download()
-        ckpt_path = os.path.join(checkpoint_dir, "model.ckpt")
-        print(f"Loading specified W&B Checkpoint from {ckpt_path}.")
-    elif os.path.exists(os.path.join("/opt/ml/checkpoints", "last.ckpt")):
-        # Restore any checkpoint present in /opt/ml/checkpoints, as this
-        # represents a checkpoint that was pre-loaded from SageMaker. We need to
-        # do this in order to be able to use Spot training, as we need this
-        # script to be able to automatically recover after being interrupted.
-        ckpt_path = os.path.join("/opt/ml/checkpoints", "last.ckpt")
-        print(
-            f"Auto-loading existing SageMaker checkpoint from {ckpt_path}. Are we resuming after an interruption?"
-        )
-
-    cli.model = torch.compile(cli.model)
-    wandb_logger.watch(cli.model)
-
-    cli.trainer.fit(cli.model, datamodule=cli.datamodule, ckpt_path=ckpt_path)
 
 
 if __name__ == "__main__":
