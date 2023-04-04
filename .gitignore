@@ -8,7 +8,7 @@ __MACOSX
 exps.zip
 exps/*
 wandb/
-clip_forge/
+clip_forge_*/
 lightning_logs/
 artifacts/
 
