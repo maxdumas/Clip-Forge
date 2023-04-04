@@ -331,7 +331,7 @@ class Autoencoder(pl.LightningModule):
         # Compute reconstruction loss
         loss = self.reconstruction_loss(pred, gt)
 
-        self.log("loss/train/reconstruction", loss)
+        self.log("loss/train/reconstruction", loss, prog_bar=True)
 
         return loss
 
@@ -375,7 +375,7 @@ class Autoencoder(pl.LightningModule):
                 occ_hat_np = pred >= self.threshold
                 iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
                 loss = iou_voxels.item()
-                self.log("loss/val/iou", loss)
+                self.log("loss/val/iou", loss, prog_bar=True)
             case OutputType.POINTCLOUD:
                 query_points = None
                 gt = data["pc_org"]

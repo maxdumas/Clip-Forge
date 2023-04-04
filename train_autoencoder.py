@@ -13,15 +13,21 @@ from pytorch_lightning.cli import LightningCLI, LightningArgumentParser
 import wandb
 from networks.autoencoder import Autoencoder
 from utils.visualization import multiple_plot_voxel, plot_real_pred
-from utils.helper import OutputType
+from utils.helper import InputType, OutputType
 from dataset.datamodule import BuildingNetDataModule
+
+from utils.visualization import make_3d_grid
 
 
 class LogPredictionSamplesCallback(Callback):
-    # TODO: Intelligently determine this based on the validation batch size
-    batch_sample_indices = set(random.sample(range(6), k=4))
+    # TODO: Intelligently determine this based on the batch size and total data set size
+    # Which batche indices to sample predictions from
+    batch_sample_indices = {0, 1}
+    # batch_sample_indices = set(random.sample(range(6), k=4))
+    # Within a sampled batch, which examples to use to sample predictions
+    indices_within_batch = random.sample(range(32), k=2)
 
-    def generate_plot_image(self, pl_module: Autoencoder, outputs, batch: dict):
+    def generate_plot_image(self, pl_module: Autoencoder, outputs, batch: dict, i: int):
         match pl_module.output_type:
             case OutputType.IMPLICIT:
                 voxel_32 = batch["voxels"].type(torch.FloatTensor)
@@ -29,13 +35,13 @@ class LogPredictionSamplesCallback(Callback):
 
                 voxels_out = (
                     (
-                        outputs[0].view(voxel_size, voxel_size, voxel_size)
+                        outputs[i].view(voxel_size, voxel_size, voxel_size)
                         > pl_module.threshold
                     )
                     .cpu()
                     .numpy()
                 )
-                real = voxel_32[0].cpu().numpy()
+                real = voxel_32[i].cpu().numpy()
                 fig = multiple_plot_voxel([real, voxels_out])
             case OutputType.POINTCLOUD:
                 gt = batch["pc_org"].type(torch.FloatTensor)
@@ -49,40 +55,50 @@ class LogPredictionSamplesCallback(Callback):
             plt.close(fig)
             return wandb.Image(im)
 
-    # def on_train_batch_end(
-    #     self,
-    #     trainer: Trainer,
-    #     pl_module: Autoencoder,
-    #     outputs, # This is just the training loss
-    #     batch: dict,
-    #     batch_idx: int,
-    # ) -> None:
-    #     # Only sample training images every 10 epochs and for a random selection of batches in the epoch.
-    #     if (
-    #         trainer.current_epoch % 10 != 0
-    #         or batch_idx not in self.batch_sample_indices
-    #     ):
-    #         return
+    def on_train_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: Autoencoder,
+        outputs, # This is just the training loss
+        batch: dict,
+        batch_idx: int,
+    ) -> None:
+        # Only sample training images every 10 epochs and for a random selection of batches in the epoch.
+        if (
+            trainer.current_epoch % 10 != 0
+            or batch_idx not in self.batch_sample_indices
+        ):
+            return
 
-    #     points_voxels = make_3d_grid(
-    #         (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
-    #     ).to(
-    #         pl_module.device
-    #     )  # TODO: Do this in the correct way
-    #     query_points = points_voxels.expand(
-    #         pl_module.test_batch_size, *points_voxels.size()
-    #     )
+        # TODO: Implement POINTCLOUD support here.
+        assert pl_module.input_type == InputType.VOXELS and pl_module.output_type == OutputType.IMPLICIT
 
-    #     if pl_module.test_batch_size != data_input.size(0):
-    #         query_points = points_voxels.expand(
-    #             data_input.size(0), *points_voxels.size()
-    #         )
+        data_input = batch["voxels"]
 
-    #     # Run prediction
-    #     outputs, _ = pl_module.forward(data_input, query_points)
+        points_voxels = make_3d_grid(
+            (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
+        ).to(
+            pl_module.device
+        )  # TODO: Do this in the correct way
+        query_points = points_voxels.expand(
+            pl_module.test_batch_size, *points_voxels.size()
+        )
 
-    #     fixed_im = self.generate_plot_image(pl_module, outputs, batch)
-    #     trainer.logger.experiment.log({f"samples/train_{batch_idx}": [fixed_im]})
+        if pl_module.test_batch_size != data_input.size(0):
+            query_points = points_voxels.expand(
+                data_input.size(0), *points_voxels.size()
+            )
+
+        # Run prediction (being sure not to affect training)
+        with torch.no_grad():
+            pl_module.eval()
+            outputs, _ = pl_module.forward(data_input, query_points)
+            pl_module.train()
+
+        trainer.logger.experiment.log({
+            f"samples/train_{batch_idx}_{i}": [self.generate_plot_image(pl_module, outputs, batch, i)]
+            for i in self.indices_within_batch
+        })
 
     def on_validation_batch_end(
         self,
@@ -103,8 +119,10 @@ class LogPredictionSamplesCallback(Callback):
         ):
             return
 
-        fixed_im = self.generate_plot_image(pl_module, outputs, batch)
-        trainer.logger.experiment.log({f"samples/val_{batch_idx}": [fixed_im]})
+        trainer.logger.experiment.log({
+            f"samples/val_{batch_idx}_{i}": [self.generate_plot_image(pl_module, outputs, batch, i)]
+            for i in self.indices_within_batch
+        })
 
 
 class AutoEncoderCLI(LightningCLI):
