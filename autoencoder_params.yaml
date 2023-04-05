@@ -49,7 +49,7 @@ trainer:
   # Stop training once this number of epochs is reached. Disabled by default (None).
   # If both max_epochs and max_steps are not specified, defaults to ``max_epochs = 1000``.
   # To enable infinite training, set ``max_epochs = -1``. (type: Optional[int], default: null)
-  max_epochs: 2000
+  max_epochs: 20_000
 
   # Force training for at least these many epochs. Disabled by default (None). (type: Optional[int], default: null)
   min_epochs:
@@ -86,7 +86,7 @@ trainer:
 
   # Overfit a fraction of training/validation data (float) or a set number of batches (int).
   # Default: ``0.0``. (type: Union[int, float], default: 0.0)
-  overfit_batches: 2
+  overfit_batches: 1
 
   # How often to check the validation set. Pass a ``float`` in the range [0.0, 1.0] to check
   # after a fraction of the training epoch. Pass an ``int`` to check after a fixed number of training
@@ -100,7 +100,7 @@ trainer:
   # validation will be done solely based on the number of training batches, requiring ``val_check_interval``
   # to be an integer value.
   # Default: ``1``. (type: Optional[int], default: 1)
-  check_val_every_n_epoch: 1
+  check_val_every_n_epoch: 50
 
   # Sanity check runs n validation batches before starting the training routine.
   # Set it to `-1` to run all batches in all validation dataloaders.
@@ -109,7 +109,7 @@ trainer:
 
   # How often to log within steps.
   # Default: ``50``. (type: Optional[int], default: null)
-  log_every_n_steps: 2
+  log_every_n_steps: 1
 
   # If ``True``, enable checkpointing.
   # It will configure a default ModelCheckpoint callback if there is no user-defined ModelCheckpoint in
@@ -171,7 +171,7 @@ trainer:
 
   # Enable anomaly detection for the autograd engine.
   # Default: ``False``. (type: bool, default: False)
-  detect_anomaly: true
+  detect_anomaly: false
 
   # Whether to run in "barebones mode", where all features that may impact raw speed are
   # disabled. This is meant for analyzing the Trainer overhead and is discouraged during regular training
@@ -216,8 +216,9 @@ model:
   test_batch_size: 32
 
   #   (type: float, default: 0.0001)
-  lr: 0.00001
+  lr: 0.001
 
+  # Used only when output type is POINTCLOUD
   #   (type: int, default: 2025)
   num_points: 2025
 
@@ -242,6 +243,8 @@ data:
   #   (required, type: <class 'Path'>)
   dataset_path: "../text2building_data/citydata/buildingnet/"
 
+  # How many points to sample during training when input type is VOXELS. The
+  # maximum number of query points is 100_000.
   #   (type: int, default: 5000)
   num_sdf_points: 5000
 
@@ -249,4 +252,4 @@ data:
   test_num_sdf_points: 5000
 
 #   (type: str, default: null)
-# ckpt_path: maxdumas/clip_forge/model-r6wk8opt:v1
+# ckpt_path: maxdumas/clip_forge_autoencoder/model-njiaypjt:v9

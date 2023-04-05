@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -131,18 +133,23 @@ class VoxelEncoderBN(nn.Module):
         super().__init__()
 
         self.net = nn.Sequential(
+            # Input convolution
             nn.Conv3d(1, 32, 3, padding=1),
             nn.BatchNorm3d(32),
             nn.ReLU(),
+            # Hidden convolution 1
             nn.Conv3d(32, 64, 3, padding=1, stride=2),
             nn.BatchNorm3d(64),
             nn.ReLU(),
+            # Hidden convolution 2
             nn.Conv3d(64, 128, 3, padding=1, stride=2),
             nn.BatchNorm3d(128),
             nn.ReLU(),
+            # Hidden convolution 3
             nn.Conv3d(128, 256, 3, padding=1, stride=2),
             nn.BatchNorm3d(256),
             nn.ReLU(),
+            # Output convolution
             nn.Conv3d(256, 512, 3, padding=1, stride=2),
             nn.Flatten(),
             nn.ReLU(),
@@ -255,36 +262,32 @@ class Autoencoder(pl.LightningModule):
         self.threshold = threshold
 
         ### Sub-Network def
-        match self.input_type:
-            case InputType.VOXELS:
-                self.encoder = VoxelEncoderBN(
-                    dim=3, c_dim=emb_dims, last_feature_transform="add_noise"
-                )
-            case InputType.POINTCLOUD:
-                self.encoder = PointNet(
-                    pc_dims=1024, c_dim=emb_dims, last_feature_transform="add_noise"
-                )
+        if self.input_type == InputType.VOXELS:
+            self.encoder = VoxelEncoderBN(
+                dim=3, c_dim=emb_dims, last_feature_transform="add_noise"
+            )
+        elif self.input_type == InputType.POINTCLOUD:
+            self.encoder = PointNet(
+                pc_dims=1024, c_dim=emb_dims, last_feature_transform="add_noise"
+            )
 
-        match self.output_type:
-            case OutputType.IMPLICIT:
-                self.decoder = Occ_Simple_Decoder(z_dim=emb_dims)
-            case OutputType.POINTCLOUD:
-                self.decoder = Foldingnet_decoder(num_points=num_points, z_dim=emb_dims)
+        if self.output_type == OutputType.IMPLICIT:
+            self.decoder = Occ_Simple_Decoder(z_dim=emb_dims)
+        elif self.output_type == OutputType.POINTCLOUD:
+            self.decoder = Foldingnet_decoder(num_points=num_points, z_dim=emb_dims)
 
     def decoding(self, shape_embedding, points=None):
-        match self.output_type:
-            case OutputType.IMPLICIT:
-                return self.decoder(points, shape_embedding)
-            case OutputType.POINTCLOUD:
-                return self.decoder(shape_embedding)
+        if self.output_type == OutputType.IMPLICIT:
+            return self.decoder(points, shape_embedding)
+        elif self.output_type == OutputType.POINTCLOUD:
+            return self.decoder(shape_embedding)
 
     def reconstruction_loss(self, pred: Tensor, gt: Tensor) -> Tensor:
-        match self.output_type:
-            case OutputType.IMPLICIT:
-                return F.mse_loss(pred.squeeze(-1), gt)
-            case OutputType.POINTCLOUD:
-                dl, dr = dist_chamfer(gt, pred)
-                return (dl.mean(dim=1) + dr.mean(dim=1)).mean()
+        if self.output_type == OutputType.IMPLICIT:
+            return F.mse_loss(pred.squeeze(-1), gt)
+        elif self.output_type == OutputType.POINTCLOUD:
+            dl, dr = dist_chamfer(gt, pred)
+            return (dl.mean(dim=1) + dr.mean(dim=1)).mean()
 
     def forward(self, data_input, query_points=None) -> tuple[Tensor, Tensor]:
         shape_embs = self.encoder(data_input)
@@ -297,18 +300,16 @@ class Autoencoder(pl.LightningModule):
 
     def extract_input(self, data: dict) -> Tensor:
         # Load appropriate input data from the training set
-        match self.input_type:
-            case InputType.VOXELS:
-                return data["voxels"]
-            case InputType.POINTCLOUD:
-                return data["pc_org"].transpose(-1, 1)
+        if self.input_type == InputType.VOXELS:
+            return data["voxels"]
+        elif self.input_type == InputType.POINTCLOUD:
+            return data["pc_org"].transpose(-1, 1)
 
-    def extract_ground_truth(self, data: dict) -> tuple[Tensor, Tensor | None]:
-        match self.output_type:
-            case OutputType.IMPLICIT:
-                return data["points_occ"], data["points"]
-            case OutputType.POINTCLOUD:
-                return data["pc_org"], None
+    def extract_ground_truth(self, data: dict) -> tuple[Tensor, Optional[Tensor]]:
+        if self.output_type ==  OutputType.IMPLICIT:
+            return data["points_occ"], data["points"]
+        elif self.output_type == OutputType.POINTCLOUD:
+            return data["pc_org"], None
 
     def create_sampling_grid(self, data_input: Tensor) -> Tensor:
         points_voxels = make_3d_grid(

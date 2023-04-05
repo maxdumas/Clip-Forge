@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Optional
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
@@ -9,9 +10,9 @@ from dataset.buildingnet_dataset import BuildingNetDataset, Split
 
 
 class BuildingNetDataModule(pl.LightningDataModule):
-    train_dataset: BuildingNetDataset | None = None
-    val_dataset: BuildingNetDataset | None = None
-    test_dataset: BuildingNetDataset | None = None
+    train_dataset: Optional[BuildingNetDataset] = None
+    val_dataset: Optional[BuildingNetDataset] = None
+    test_dataset: Optional[BuildingNetDataset] = None
 
     def __init__(
         self,

@@ -31,25 +31,24 @@ class LogPredictionSamplesCallback(Callback):
     indices_within_batch = random.sample(range(32), k=2)
 
     def generate_plot_image(self, pl_module: Autoencoder, outputs, batch: dict, i: int):
-        match pl_module.output_type:
-            case OutputType.IMPLICIT:
-                voxel_32 = batch["voxels"].type(torch.FloatTensor)
-                voxel_size = 32
+        if pl_module.output_type == OutputType.IMPLICIT:
+            voxel_32 = batch["voxels"].type(torch.FloatTensor)
+            voxel_size = 32
 
-                voxels_out = (
-                    (
-                        outputs[i].view(voxel_size, voxel_size, voxel_size)
-                        > pl_module.threshold
-                    )
-                    .cpu()
-                    .numpy()
+            voxels_out = (
+                (
+                    outputs[i].view(voxel_size, voxel_size, voxel_size)
+                    > pl_module.threshold
                 )
-                real = voxel_32[i].cpu().numpy()
-                fig = multiple_plot_voxel([real, voxels_out])
-            case OutputType.POINTCLOUD:
-                gt = batch["pc_org"].type(torch.FloatTensor)
+                .cpu()
+                .numpy()
+            )
+            real = voxel_32[i].cpu().numpy()
+            fig = multiple_plot_voxel([real, voxels_out])
+        elif pl_module.output_type == OutputType.POINTCLOUD:
+            gt = batch["pc_org"].type(torch.FloatTensor)
 
-                fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
+            fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
 
         buf = io.BytesIO()
         fig.savefig(buf)
@@ -109,11 +108,8 @@ class LogPredictionSamplesCallback(Callback):
         """Called when the validation batch ends. This renders an image of the
         reconstructed model next to the original model to compare results."""
 
-        # Only sample validation images every N epochs for a random selection of batches in the epoch.
-        if (
-            trainer.current_epoch % 10 != 0
-            or batch_idx not in self.batch_sample_indices
-        ):
+        # Only sample validation images for a random selection of batches in the epoch.
+        if batch_idx not in self.batch_sample_indices:
             return
 
         trainer.logger.experiment.log(
@@ -172,7 +168,7 @@ class AutoEncoderCLI(LightningCLI):
         self.search_for_checkpoints(wandb_logger)
 
         self.model = self._get(self.config_init, "model")
-        self.model = torch.compile(self.model)
+        # self.model = torch.compile(self.model)
         wandb_logger.watch(self.model)
 
 
