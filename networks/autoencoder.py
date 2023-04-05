@@ -129,36 +129,34 @@ class Foldingnet_decoder(nn.Module):
 class VoxelEncoderBN(nn.Module):
     def __init__(self, dim=3, c_dim=128, last_feature_transform=None):
         super().__init__()
-        self.actvn = F.relu
 
-        self.conv_in = nn.Conv3d(1, 32, 3, padding=1)
-
-        self.conv_0 = nn.Conv3d(32, 64, 3, padding=1, stride=2)
-        self.conv_1 = nn.Conv3d(64, 128, 3, padding=1, stride=2)
-        self.conv_2 = nn.Conv3d(128, 256, 3, padding=1, stride=2)
-        self.conv_3 = nn.Conv3d(256, 512, 3, padding=1, stride=2)
-        self.fc = nn.Linear(512 * 2 * 2 * 2, c_dim)
-
-        self.conv0_bn = nn.BatchNorm3d(32)
-        self.conv1_bn = nn.BatchNorm3d(64)
-        self.conv2_bn = nn.BatchNorm3d(128)
-        self.conv3_bn = nn.BatchNorm3d(256)
+        self.net = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1),
+            nn.BatchNorm3d(32),
+            nn.ReLU(),
+            nn.Conv3d(32, 64, 3, padding=1, stride=2),
+            nn.BatchNorm3d(64),
+            nn.ReLU(),
+            nn.Conv3d(64, 128, 3, padding=1, stride=2),
+            nn.BatchNorm3d(128),
+            nn.ReLU(),
+            nn.Conv3d(128, 256, 3, padding=1, stride=2),
+            nn.BatchNorm3d(256),
+            nn.ReLU(),
+            nn.Conv3d(256, 512, 3, padding=1, stride=2),
+            nn.Flatten(),
+            nn.ReLU(),
+            nn.Linear(512 * 2 * 2 * 2, c_dim),
+        )
 
         self.last_feature_transform = last_feature_transform
 
     def forward(self, x: Tensor):
-        batch_size = x.size(0)
         x = x.unsqueeze(1)
-        net = self.conv_in(x)
-        net = self.conv_0(self.actvn(self.conv0_bn(net)))
-        net = self.conv_1(self.actvn(self.conv1_bn(net)))
-        net = self.conv_2(self.actvn(self.conv2_bn(net)))
-        net = self.conv_3(self.actvn(self.conv3_bn(net)))
-        hidden = net.view(batch_size, 512 * 2 * 2 * 2)
-        x = self.fc(self.actvn(hidden))
+        x = self.net(x)
 
         if self.last_feature_transform == "add_noise" and self.training is True:
-            x = x + 0.1 * torch.randn(*x.size()).to(x.device)
+            x = x + 0.1 * torch.randn(*x.size(), device=x.device)
 
         return x
 
@@ -239,6 +237,7 @@ def compute_iou(occ1: Tensor, occ2: Tensor):
     iou = area_intersect / area_union
 
     return iou
+
 
 class Autoencoder(pl.LightningModule):
     encoder: nn.Module
@@ -355,9 +354,9 @@ class Autoencoder(pl.LightningModule):
     def validation_step(self, data: dict, data_idx):
         data_input = self.extract_input(data)
         gt, query_points = self.extract_ground_truth(data)
-        
+
         pred, _ = self.forward(data_input, query_points)
-        
+
         loss = self.reconstruction_loss(pred, gt)
 
         self.log("loss/val/reconstruction", loss)
@@ -376,15 +375,15 @@ class Autoencoder(pl.LightningModule):
             self.log("loss/val/iou", loss, prog_bar=True)
 
         return pred
-    
+
     def test_step(self, data: dict, data_idx):
         data_input = self.extract_input(data)
         gt, query_points = self.extract_ground_truth(data)
-        
+
         pred, _ = self.forward(data_input, query_points)
-        
+
         loss = self.reconstruction_loss(pred, gt)
-        
+
         self.log("loss/test/reconstruction", loss)
 
         if self.output_type == OutputType.IMPLICIT:

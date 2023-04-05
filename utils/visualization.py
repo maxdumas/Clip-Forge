@@ -201,17 +201,16 @@ def plot_real_pred(real_points, pred_points, num_plots, lmit=0.6):
 
 
 def multiple_plot_voxel(batch_data_points, transpose=True):
-    fig = plt.figure(figsize=(40, 10))
+    fig = plt.figure(figsize=(20, 10))
 
-    for i in range(len(batch_data_points)):
+    for i, data_points in enumerate(batch_data_points):
         plt_num = "1" + str(len(batch_data_points)) + str(i + 1)
         ax = fig.add_subplot(int(plt_num), projection=Axes3D.name)
         data_points = batch_data_points[i]
-        # print(data_points.shape)
+
         if transpose == True:
             data_points = data_points.transpose(2, 0, 1)
-        # else:
-        # data_points = data_points.transpose(1, 0, 2)
+            
         ax.voxels(data_points, edgecolor="k")
         ax.set_xlabel("Z")
         ax.set_ylabel("X")

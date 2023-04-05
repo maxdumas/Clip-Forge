@@ -51,12 +51,12 @@ class LogPredictionSamplesCallback(Callback):
 
                 fig = plot_real_pred(gt.detach().cpu().numpy(), outputs.numpy(), 1)
 
-        with io.BytesIO() as buf:
-            fig.savefig(buf)
-            buf.seek(0)
-            im = Image.open(buf)
-            plt.close(fig)
-            return wandb.Image(im)
+        buf = io.BytesIO()
+        fig.savefig(buf)
+        buf.seek(0)
+        im = Image.open(buf)
+        plt.close(fig)
+        return wandb.Image(im)
 
     def on_train_batch_end(
         self,
@@ -94,7 +94,7 @@ class LogPredictionSamplesCallback(Callback):
                     self.generate_plot_image(pl_module, outputs, batch, i)
                 ]
                 for i in self.indices_within_batch
-            }
+            },
         )
 
     def on_validation_batch_end(
@@ -122,7 +122,7 @@ class LogPredictionSamplesCallback(Callback):
                     self.generate_plot_image(pl_module, outputs, batch, i)
                 ]
                 for i in self.indices_within_batch
-            }
+            },
         )
 
 
@@ -172,7 +172,7 @@ class AutoEncoderCLI(LightningCLI):
         self.search_for_checkpoints(wandb_logger)
 
         self.model = self._get(self.config_init, "model")
-        # self.model = torch.compile(self.model)
+        self.model = torch.compile(self.model)
         wandb_logger.watch(self.model)
 
 
