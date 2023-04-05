@@ -281,7 +281,7 @@ class Autoencoder(pl.LightningModule):
     def reconstruction_loss(self, pred: Tensor, gt: Tensor) -> Tensor:
         match self.output_type:
             case OutputType.IMPLICIT:
-                return torch.mean((pred.squeeze(-1) - gt) ** 2)
+                return F.mse_loss(pred.squeeze(-1), gt)
             case OutputType.POINTCLOUD:
                 dl, dr = dist_chamfer(gt, pred)
                 return (dl.mean(dim=1) + dr.mean(dim=1)).mean()
@@ -302,23 +302,19 @@ class Autoencoder(pl.LightningModule):
                 return data["voxels"]
             case InputType.POINTCLOUD:
                 return data["pc_org"].transpose(-1, 1)
-            
+
     def extract_ground_truth(self, data: dict) -> tuple[Tensor, Tensor | None]:
         match self.output_type:
             case OutputType.IMPLICIT:
                 return data["points_occ"], data["points"]
             case OutputType.POINTCLOUD:
                 return data["pc_org"], None
-            
+
     def create_sampling_grid(self, data_input: Tensor) -> Tensor:
         points_voxels = make_3d_grid(
-            (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
-        ).to(
-            self.device
-        )  # TODO: Do this in the correct way
-        query_points = points_voxels.expand(
-            self.test_batch_size, *points_voxels.size()
+            (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3, device=self.device
         )
+        query_points = points_voxels.expand(self.test_batch_size, *points_voxels.size())
 
         if self.test_batch_size != data_input.size(0):
             query_points = points_voxels.expand(
