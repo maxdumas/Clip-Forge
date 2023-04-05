@@ -6,7 +6,12 @@ import matplotlib.pyplot as plt
 import torch
 from PIL import Image
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import Callback, ModelCheckpoint, EarlyStopping
+from pytorch_lightning.callbacks import (
+    Callback,
+    ModelCheckpoint,
+    EarlyStopping,
+    ModelSummary,
+)
 from pytorch_lightning.loggers.wandb import WandbLogger
 from pytorch_lightning.cli import LightningCLI, LightningArgumentParser
 
@@ -15,8 +20,6 @@ from networks.autoencoder import Autoencoder
 from utils.visualization import multiple_plot_voxel, plot_real_pred
 from utils.helper import InputType, OutputType
 from dataset.datamodule import BuildingNetDataModule
-
-from utils.visualization import make_3d_grid
 
 
 class LogPredictionSamplesCallback(Callback):
@@ -59,7 +62,7 @@ class LogPredictionSamplesCallback(Callback):
         self,
         trainer: Trainer,
         pl_module: Autoencoder,
-        outputs, # This is just the training loss
+        outputs,  # This is just the training loss
         batch: dict,
         batch_idx: int,
     ) -> None:
@@ -71,23 +74,13 @@ class LogPredictionSamplesCallback(Callback):
             return
 
         # TODO: Implement POINTCLOUD support here.
-        assert pl_module.input_type == InputType.VOXELS and pl_module.output_type == OutputType.IMPLICIT
-
-        data_input = batch["voxels"]
-
-        points_voxels = make_3d_grid(
-            (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
-        ).to(
-            pl_module.device
-        )  # TODO: Do this in the correct way
-        query_points = points_voxels.expand(
-            pl_module.test_batch_size, *points_voxels.size()
+        assert (
+            pl_module.input_type == InputType.VOXELS
+            and pl_module.output_type == OutputType.IMPLICIT
         )
 
-        if pl_module.test_batch_size != data_input.size(0):
-            query_points = points_voxels.expand(
-                data_input.size(0), *points_voxels.size()
-            )
+        data_input = batch["voxels"]
+        query_points = pl_module.create_sampling_grid(data_input)
 
         # Run prediction (being sure not to affect training)
         with torch.no_grad():
@@ -95,10 +88,14 @@ class LogPredictionSamplesCallback(Callback):
             outputs, _ = pl_module.forward(data_input, query_points)
             pl_module.train()
 
-        trainer.logger.experiment.log({
-            f"samples/train_{batch_idx}_{i}": [self.generate_plot_image(pl_module, outputs, batch, i)]
-            for i in self.indices_within_batch
-        })
+        trainer.logger.experiment.log(
+            {
+                f"samples/train_{batch_idx}_{i}": [
+                    self.generate_plot_image(pl_module, outputs, batch, i)
+                ]
+                for i in self.indices_within_batch
+            }
+        )
 
     def on_validation_batch_end(
         self,
@@ -119,10 +116,14 @@ class LogPredictionSamplesCallback(Callback):
         ):
             return
 
-        trainer.logger.experiment.log({
-            f"samples/val_{batch_idx}_{i}": [self.generate_plot_image(pl_module, outputs, batch, i)]
-            for i in self.indices_within_batch
-        })
+        trainer.logger.experiment.log(
+            {
+                f"samples/val_{batch_idx}_{i}": [
+                    self.generate_plot_image(pl_module, outputs, batch, i)
+                ]
+                for i in self.indices_within_batch
+            }
+        )
 
 
 class AutoEncoderCLI(LightningCLI):
@@ -158,7 +159,7 @@ class AutoEncoderCLI(LightningCLI):
         wandb_logger = WandbLogger(
             project="clip_forge_autoencoder",
             name=os.environ.get("TRAINING_JOB_NAME", None),
-            log_model=True,
+            log_model="all",
         )
 
         self.config_init = self.parser.instantiate_classes(self.config)
@@ -179,26 +180,30 @@ def main():
     checkpoint_callback = ModelCheckpoint(
         # TODO: Implement a better check that we are in SageMaker
         "/opt/ml/checkpoints" if os.path.exists("/opt/ml") else None,
-        monitor="loss/val/iou",
-        mode="max",
-        every_n_epochs=5,
-        save_last=True,
+        monitor="loss/train/reconstruction",
+        mode="min",
+        every_n_epochs=10,
     )
-    early_stop_callback = EarlyStopping(
-        monitor="loss/val/iou",
-        mode="max",
-        patience=50,
-        stopping_threshold=1.0,
-        # divergence_threshold=0.01,
-        verbose=True,
-    )
+    # early_stop_callback = EarlyStopping(
+    #    monitor="loss/train/reconstruction",
+    #    mode="min",
+    #    patience=50,
+    #    stopping_threshold=0.0,
+    #    # divergence_threshold=0.01,
+    #    verbose=True,
+    # )
     sampling_callback = LogPredictionSamplesCallback()
+    model_summary_callback = ModelSummary(max_depth=-1)
 
     AutoEncoderCLI(
         Autoencoder,
         BuildingNetDataModule,
         trainer_defaults={
-            "callbacks": [checkpoint_callback, early_stop_callback, sampling_callback]
+            "callbacks": [
+                model_summary_callback,
+                checkpoint_callback,
+                sampling_callback,
+            ]
         },
         save_config_callback=None,
     )

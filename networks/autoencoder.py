@@ -307,23 +307,40 @@ class Autoencoder(pl.LightningModule):
         # TODO: How do we parameterize this using LightningCLI?
         return torch.optim.Adam(self.parameters(), lr=self.lr)
 
-    def training_step(self, data: dict, batch_idx):
+    def extract_input(self, data: dict) -> Tensor:
         # Load appropriate input data from the training set
         match self.input_type:
             case InputType.VOXELS:
-                data_input = data["voxels"]
+                return data["voxels"]
             case InputType.POINTCLOUD:
-                data_input = data["pc_org"].transpose(-1, 1)
-
-        # Load appropriate output data from the training set
+                return data["pc_org"].transpose(-1, 1)
+            
+    def extract_ground_truth(self, data: dict) -> tuple[Tensor, Tensor | None]:
         match self.output_type:
             case OutputType.IMPLICIT:
-                query_points = data["points"]
-                occ = data["points_occ"]
-                gt = occ
+                return data["points_occ"], data["points"]
             case OutputType.POINTCLOUD:
-                query_points = None
-                gt = data["pc_org"]
+                return data["pc_org"], None
+            
+    def create_sampling_grid(self, data_input: Tensor) -> Tensor:
+        points_voxels = make_3d_grid(
+            (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
+        ).to(
+            self.device
+        )  # TODO: Do this in the correct way
+        query_points = points_voxels.expand(
+            self.test_batch_size, *points_voxels.size()
+        )
+
+        if self.test_batch_size != data_input.size(0):
+            query_points = points_voxels.expand(
+                data_input.size(0), *points_voxels.size()
+            )
+        return query_points
+
+    def training_step(self, data: dict, batch_idx):
+        data_input = self.extract_input(data)
+        gt, query_points = self.extract_ground_truth(data)
 
         # Run prediction
         pred, _ = self.forward(data_input, query_points)
@@ -336,53 +353,51 @@ class Autoencoder(pl.LightningModule):
         return loss
 
     def validation_step(self, data: dict, data_idx):
-        match self.input_type:
-            case InputType.VOXELS:
-                data_input = data["voxels"]
-            case InputType.POINTCLOUD:
-                data_input = data["pc_org"].transpose(-1, 1)
+        data_input = self.extract_input(data)
+        gt, query_points = self.extract_ground_truth(data)
+        
+        pred, _ = self.forward(data_input, query_points)
+        
+        loss = self.reconstruction_loss(pred, gt)
 
-        match self.output_type:
-            case OutputType.IMPLICIT:
-                # Compute reconstruction loss
-                query_points = data["points"]
-                occ = data["points_occ"]
-                gt = occ
-                pred, _ = self.forward(data_input, query_points)
+        self.log("loss/val/reconstruction", loss)
 
-                loss = self.reconstruction_loss(pred, gt)
-                self.log("loss/val/reconstruction", loss)
+        if self.output_type == OutputType.IMPLICIT:
+            # Compute IOU loss for Implicit representation
+            query_points = self.create_sampling_grid(data_input)
 
-                # Compute IOU loss for Implicit representation
-                points_voxels = make_3d_grid(
-                    (-0.5 + 1 / 64,) * 3, (0.5 - 1 / 64,) * 3, (32,) * 3
-                ).to(
-                    self.device
-                )  # TODO: Do this in the correct way
-                query_points = points_voxels.expand(
-                    self.test_batch_size, *points_voxels.size()
-                )
+            # Run prediction
+            pred, _ = self.forward(data_input, query_points)
 
-                if self.test_batch_size != data_input.size(0):
-                    query_points = points_voxels.expand(
-                        data_input.size(0), *points_voxels.size()
-                    )
+            voxels_occ_np = data["voxels"] >= 0.5
+            occ_hat_np = pred >= self.threshold
+            iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
+            loss = iou_voxels.item()
+            self.log("loss/val/iou", loss, prog_bar=True)
 
-                # Run prediction
-                pred, _ = self.forward(data_input, query_points)
+        return pred
+    
+    def test_step(self, data: dict, data_idx):
+        data_input = self.extract_input(data)
+        gt, query_points = self.extract_ground_truth(data)
+        
+        pred, _ = self.forward(data_input, query_points)
+        
+        loss = self.reconstruction_loss(pred, gt)
+        
+        self.log("loss/test/reconstruction", loss)
 
-                voxels_occ_np = data["voxels"] >= 0.5
-                occ_hat_np = pred >= self.threshold
-                iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
-                loss = iou_voxels.item()
-                self.log("loss/val/iou", loss, prog_bar=True)
-            case OutputType.POINTCLOUD:
-                query_points = None
-                gt = data["pc_org"]
+        if self.output_type == OutputType.IMPLICIT:
+            # Compute IOU loss for Implicit representation
+            query_points = self.create_sampling_grid(data_input)
 
-                pred, _ = self.forward(data_input, query_points)
-                loss = self.reconstruction_loss(pred, gt)
+            # Run prediction
+            pred, _ = self.forward(data_input, query_points)
 
-                self.log("loss/val/reconstruction", loss)
+            voxels_occ_np = data["voxels"] >= 0.5
+            occ_hat_np = pred >= self.threshold
+            iou_voxels = compute_iou(voxels_occ_np, occ_hat_np).mean()
+            loss = iou_voxels.item()
+            self.log("loss/test/iou", loss, prog_bar=True)
 
         return pred
