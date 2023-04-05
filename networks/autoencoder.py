@@ -173,34 +173,23 @@ class Occ_Simple_Decoder(nn.Module):
 
         self.fc_z = nn.Linear(z_dim, hidden_size)
 
-        self.block0 = ResnetBlockFC(hidden_size)
-        self.block1 = ResnetBlockFC(hidden_size)
-        self.block2 = ResnetBlockFC(hidden_size)
-        self.block3 = ResnetBlockFC(hidden_size)
-        self.block4 = ResnetBlockFC(hidden_size)
-
-        self.fc_out = nn.Linear(hidden_size, 1)
-
-        if not leaky:
-            self.actvn = F.relu
-        else:
-            self.actvn = lambda x: F.leaky_relu(x, 0.2)
+        self.net = nn.Sequential(
+            ResnetBlockFC(hidden_size),
+            ResnetBlockFC(hidden_size),
+            ResnetBlockFC(hidden_size),
+            ResnetBlockFC(hidden_size),
+            ResnetBlockFC(hidden_size),
+            nn.LeakyReLU(0.2) if leaky else nn.ReLU(),
+            nn.Linear(hidden_size, 1),
+        )
 
         self.last_sig = last_sig
 
     def forward(self, p: Tensor, z: Tensor):
-        net = self.fc_p(p)
-
+        net_p = self.fc_p(p)
         net_z = self.fc_z(z).unsqueeze(1)
-        net = net + net_z
 
-        net = self.block0(net)
-        net = self.block1(net)
-        net = self.block2(net)
-        net = self.block3(net)
-        net = self.block4(net)
-
-        out = self.fc_out(self.actvn(net))
+        out = self.net(net_p + net_z)
         out = out.squeeze(-1)
 
         if self.last_sig == True:
