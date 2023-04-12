@@ -1,5 +1,7 @@
-# Requirements to be installed when running in SageMaker
+# Requirements to be installed when running in SageMaker. This assume pytorch,
+# etc. are already installed.
 
+plumbum
 wandb
 pytorch_lightning[extra]
 trimesh
