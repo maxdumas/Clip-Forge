@@ -8,18 +8,18 @@ from PIL import Image
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import (
     Callback,
-    ModelCheckpoint,
     EarlyStopping,
+    ModelCheckpoint,
     ModelSummary,
 )
+from pytorch_lightning.cli import ArgsType, LightningArgumentParser, LightningCLI
 from pytorch_lightning.loggers.wandb import WandbLogger
-from pytorch_lightning.cli import LightningCLI, LightningArgumentParser, ArgsType
-
 import wandb
-from networks.autoencoder import Autoencoder
-from utils.visualization import multiple_plot_voxel, plot_real_pred
-from utils.helper import InputType, OutputType
-from dataset.datamodule import BuildingNetDataModule
+
+from .dataset.datamodule import BuildingNetDataModule
+from .networks.autoencoder import Autoencoder
+from .utils.helper import InputType, OutputType
+from .utils.visualization import multiple_plot_voxel, plot_real_pred
 
 
 class LogPredictionSamplesCallback(Callback):

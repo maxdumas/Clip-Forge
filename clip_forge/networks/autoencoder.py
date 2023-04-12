@@ -7,9 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from utils.visualization import make_3d_grid
-
-from utils.helper import InputType, OutputType
+from ..utils.helper import InputType, OutputType
+from ..utils.visualization import make_3d_grid
 from .network_utils import ResnetBlockFC
 
 EPS = 1e-6

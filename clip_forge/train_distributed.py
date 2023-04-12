@@ -1,9 +1,9 @@
-import boto3
-import sagemaker
-import wandb
-from sagemaker.pytorch import PyTorch
 from uuid import uuid4
 
+import boto3
+import sagemaker
+from sagemaker.pytorch import PyTorch
+import wandb
 
 wandb.login()
 settings = wandb.setup().settings
@@ -15,7 +15,7 @@ session = sagemaker.Session(boto_session=boto3_session)
 
 # This job name is used as prefix to the sagemaker training job. Makes it easy
 # for your look for your training job in SageMaker Training job console.
-job_name = "sm-full-1" # TODO: Generate using same code and W&B
+job_name = "sm-full-1" # TODO: Generate using same code as W&B
 print("Job name: ", job_name)
 
 # This is the location that SageMaker will automatically store (and load)

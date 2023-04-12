@@ -6,7 +6,7 @@ entrypoint for the container when running SageMaker Training Jobs.
 
 import sys
 
-from train_autoencoder import main
+from clip_forge.train_autoencoder import main
 
 if __name__ == "__main__":
     args = ["fit"] + sys.argv[1:].copy()

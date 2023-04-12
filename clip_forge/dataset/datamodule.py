@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 import torch
 
-from dataset.buildingnet_dataset import BuildingNetDataset, Split
+from .buildingnet_dataset import BuildingNetDataset, Split
 
 
 class BuildingNetDataModule(pl.LightningDataModule):

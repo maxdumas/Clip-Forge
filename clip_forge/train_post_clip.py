@@ -15,13 +15,13 @@ from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
 import wandb
-from dataset.datamodule import BuildingNetDataModule
-from networks.autoencoder import Autoencoder
-from networks.latent_flows import LatentFlows
-from utils import helper
-from utils.visualization import make_3d_grid, multiple_plot, multiple_plot_voxel
+
+from .dataset.datamodule import BuildingNetDataModule
+from .networks.autoencoder import Autoencoder
+from .networks.latent_flows import LatentFlows
+from .utils import helper
+from .utils.visualization import make_3d_grid, multiple_plot, multiple_plot_voxel
 
 memory = Memory(".joblib_cache")
 
@@ -301,7 +301,7 @@ def main():
     wandb_logger.log_hyperparams(args)
 
     # Load CLIP
-    args.device = "cuda"  # TODO: Define this in a better way
+    args.device = "mps"  # TODO: Define this in a better way
     clip_model, n_px, cond_emb_dim = get_clip_model(args.clip_model_type, args.device)
 
     # Loading other networks
