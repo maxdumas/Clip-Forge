@@ -1,5 +1,6 @@
-from uuid import uuid4
+import os
 from enum import Enum
+from uuid import uuid4
 
 import boto3
 import sagemaker
@@ -23,11 +24,13 @@ class DistributedTraining(Application):
     )
 
     def main(self, phase: Phase, config_path: ExistingFile, remote_data_location: str):
+        config_path = os.path.relpath(config_path)
+
         wandb.login()
         settings = wandb.setup().settings
         current_api_key = wandb.wandb_lib.apikey.api_key(settings=settings)
 
-        boto3_session = boto3.Session(region_name="us-east-1", profile_name="cornell")
+        boto3_session = boto3.Session(region_name="us-east-1")
         session = sagemaker.Session(boto_session=boto3_session)
 
         # This job name is used as prefix to the sagemaker training job. Makes it easy
@@ -80,7 +83,7 @@ class DistributedTraining(Application):
             checkpoint_s3_uri=autoresume_checkpoint_s3_uri,  # S3 location to automatically load and store checkpoints from
             hyperparameters={
                 "config": config_path,  # Default params
-                "dataset_path": "/opt/ml/input/data/train",  # Hardcode dataset_path to where the S3 data will be mounted.
+                "data.dataset_path": "/opt/ml/input/data/train",  # Hardcode dataset_path to where the S3 data will be mounted.
             },
             **runtime_args,
         )
