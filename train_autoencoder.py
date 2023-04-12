@@ -13,7 +13,7 @@ from pytorch_lightning.callbacks import (
     ModelSummary,
 )
 from pytorch_lightning.loggers.wandb import WandbLogger
-from pytorch_lightning.cli import LightningCLI, LightningArgumentParser
+from pytorch_lightning.cli import LightningCLI, LightningArgumentParser, ArgsType
 
 import wandb
 from networks.autoencoder import Autoencoder
@@ -65,7 +65,8 @@ class LogPredictionSamplesCallback(Callback):
         batch: dict,
         batch_idx: int,
     ) -> None:
-        # Only sample training images every 10 epochs and for a random selection of batches in the epoch.
+        # Only sample training images every 10 epochs and for a random selection
+        # of batches in the epoch.
         if (
             trainer.current_epoch % 10 != 0
             or batch_idx not in self.batch_sample_indices
@@ -172,7 +173,7 @@ class AutoEncoderCLI(LightningCLI):
         wandb_logger.watch(self.model)
 
 
-def main():
+def main(args: ArgsType = None):
     checkpoint_callback = ModelCheckpoint(
         # TODO: Implement a better check that we are in SageMaker
         "/opt/ml/checkpoints" if os.path.exists("/opt/ml") else None,
@@ -202,6 +203,7 @@ def main():
             ]
         },
         save_config_callback=None,
+        args=args,
     )
 
 

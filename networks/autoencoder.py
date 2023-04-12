@@ -177,7 +177,6 @@ class Occ_Simple_Decoder(nn.Module):
 
         # Submodules
         self.fc_p = nn.Linear(point_dim, hidden_size)
-
         self.fc_z = nn.Linear(z_dim, hidden_size)
 
         self.net = nn.Sequential(

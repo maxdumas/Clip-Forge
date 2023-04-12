@@ -86,7 +86,7 @@ trainer:
 
   # Overfit a fraction of training/validation data (float) or a set number of batches (int).
   # Default: ``0.0``. (type: Union[int, float], default: 0.0)
-  overfit_batches: 1
+  overfit_batches: 0.0
 
   # How often to check the validation set. Pass a ``float`` in the range [0.0, 1.0] to check
   # after a fraction of the training epoch. Pass an ``int`` to check after a fixed number of training
@@ -241,7 +241,8 @@ data:
   dataset_name: BuildingNet
 
   #   (required, type: <class 'Path'>)
-  dataset_path: "../text2building_data/citydata/buildingnet/"
+  dataset_path: /opt/ml/input/data/train # TODO: Define as SM_CHANNEL_TRAIN
+  # dataset_path: "../text2building_data/citydata/buildingnet/"
 
   # How many points to sample during training when input type is VOXELS. The
   # maximum number of query points is 100_000.
