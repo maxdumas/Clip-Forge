@@ -393,19 +393,21 @@ def main():
         "/opt/ml/checkpoints" if "SM_MODEL_DIR" in os.environ else None,
         monitor="Loss/val",
         mode="max",
-        every_n_epochs=5,
-        save_last=True,
+        every_n_epochs=10,
     )
-    early_stop_callback = EarlyStopping(monitor="Loss/val", mode="min", patience=15)
+    # early_stop_callback = EarlyStopping(monitor="Loss/val", mode="min", patience=15)
     sampling_callback = LogPredictionSamplesCallback(
         args.text_query, args.threshold, args.output_type, net, clip_model
     )
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         logger=wandb_logger,
-        callbacks=[checkpoint_callback, early_stop_callback, sampling_callback],
+        callbacks=[checkpoint_callback, sampling_callback],
         accelerator="auto",
-        precision=16,
+        precision='16-mixed',
+        # TODO: make this configurable
+        check_val_every_n_epoch=50,
+        log_every_n_steps=1,
     )
 
     trainer.fit(
