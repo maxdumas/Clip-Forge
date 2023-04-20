@@ -5,9 +5,9 @@ from uuid import uuid4
 import boto3
 import sagemaker
 from sagemaker.pytorch import PyTorch
-from plumbum.cli import Application, Flag, ExistingFile
+from plumbum.cli import Application, Flag, ExistingFile, SwitchAttr
 import wandb
-
+import yaml
 
 class Phase(str, Enum):
     AUTOENCODER = "autoencoder"
@@ -21,6 +21,11 @@ class DistributedTraining(Application):
     develop = Flag(
         ["-d", "--develop"],
         help="Run in development mode. Enable to keep instance alive after training when iterating. Disable to use spot instances.",
+    )
+
+    preload_config = Flag(
+        ["-p", "--preload-config"],
+        help="Preload configuration file and send its contents as a hyperparameter dict, instead of sending the file itself.",
     )
 
     def main(self, phase: Phase, config_path: ExistingFile, remote_data_location: str):
@@ -62,6 +67,17 @@ class DistributedTraining(Application):
                 "max_wait": 24 * 60 * 60 + 1,
             }
 
+        if self.preload_config:
+            hyperparameters = {
+                **yaml.safe_load(open(config_path, encoding="utf-8")),
+                "dataset_path": "/opt/ml/input/data/train",  # Hardcode dataset_path to where the S3 data will be mounted.
+            }
+        else:
+            hyperparameters = {
+                "config": config_path,  # Default params
+                "data.dataset_path": "/opt/ml/input/data/train",  # Hardcode dataset_path to where the S3 data will be mounted.
+            }
+
         estimator = PyTorch(
             base_job_name=job_name,
             source_dir=".",
@@ -74,6 +90,7 @@ class DistributedTraining(Application):
             instance_type="ml.g5.8xlarge",  # Instance type to launch
             debugger_hook_config=False,
             environment={
+                "PHASE": phase.value,
                 "WANDB_API_KEY": current_api_key,
                 # Allow W&B to resume the current run if Spot interrupts and restarts us on a different machine.
                 "WANDB_RESUME": "allow",
@@ -81,10 +98,7 @@ class DistributedTraining(Application):
             },
             input_mode="FastFile",
             checkpoint_s3_uri=autoresume_checkpoint_s3_uri,  # S3 location to automatically load and store checkpoints from
-            hyperparameters={
-                "config": config_path,  # Default params
-                "data.dataset_path": "/opt/ml/input/data/train",  # Hardcode dataset_path to where the S3 data will be mounted.
-            },
+            hyperparameters=hyperparameters,
             **runtime_args,
         )
 

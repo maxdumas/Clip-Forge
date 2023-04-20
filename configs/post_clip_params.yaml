@@ -1,0 +1,14 @@
+# Note that this config is not derived from the Pytorch Lightning CLI. It is
+# just a basic shim for the command line options defined in train_post_clip.py.
+
+dataset_name: BuildingNet
+
+autoencoder_checkpoint: maxdumas/clip_forge_autoencoder/model-f6vppe9g:v8
+
+num_views: 1
+text_query: "\"an office building\" \"a church\" \"a cottage\""
+batch_size: 128
+test_batch_size: 128
+lr: 0.00003
+
+emb_dims: 256

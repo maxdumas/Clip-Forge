@@ -3,7 +3,10 @@ import argparse
 import io
 import os
 
-from joblib import Memory
+# Hack to fix broken checkpoint imports from old versions of the code structure
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import clip
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,8 +25,6 @@ from .networks.autoencoder import Autoencoder
 from .networks.latent_flows import LatentFlows
 from .utils import helper
 from .utils.visualization import make_3d_grid, multiple_plot, multiple_plot_voxel
-
-memory = Memory(".joblib_cache")
 
 clip_models = {
     "B-16": {
@@ -48,7 +49,6 @@ def get_clip_model(clip_model_type: str, device) -> tuple[CLIP, int, int]:
     return clip_model, input_resolution, model_opts["emb_dim"]
 
 
-@memory.cache(ignore=["device", "autoencoder", "clip_model", "dataloader"])
 def get_condition_embeddings(
     input_type: str,
     device,
@@ -137,8 +137,8 @@ class LogPredictionSamplesCallback(Callback):
         num_figs = 3
         voxel_size = 32
         shape = (voxel_size, voxel_size, voxel_size)
-        p = make_3d_grid([-0.5] * 3, [+0.5] * 3, shape)
-        query_points = p.expand(num_figs, *p.size()).to(self.autoencoder.device)
+        p = make_3d_grid([-0.5] * 3, [+0.5] * 3, shape, device=self.autoencoder.device)
+        query_points = p.expand(num_figs, *p.size())
 
         if batch_idx != 0:
             # We only want to generate prediction images on the first batch of the epoch
@@ -276,10 +276,6 @@ def get_local_parser():
     parser.add_argument(
         "--seed_nf", type=int, default=1, metavar="N", help="add or remove"
     )
-    parser.add_argument(
-        "--images_type", type=str, default=None, help="img_choy13 or img_custom"
-    )
-    parser.add_argument("--n_px", type=int, default=224, help="Resolution of the image")
 
     args = parser.parse_args()
     return args
@@ -301,7 +297,7 @@ def main():
     wandb_logger.log_hyperparams(args)
 
     # Load CLIP
-    args.device = "mps"  # TODO: Define this in a better way
+    args.device = "cuda"  # TODO: Define this in a better way
     clip_model, n_px, cond_emb_dim = get_clip_model(args.clip_model_type, args.device)
 
     # Loading other networks
