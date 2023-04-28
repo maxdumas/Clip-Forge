@@ -175,7 +175,7 @@ def main(args: ArgsType = None):
     checkpoint_callback = ModelCheckpoint(
         # TODO: Implement a better check that we are in SageMaker
         "/opt/ml/checkpoints" if os.path.exists("/opt/ml") else None,
-        monitor="loss/train/reconstruction",
+        monitor="loss/val/iou",
         mode="min",
         every_n_epochs=10,
     )
