@@ -262,11 +262,11 @@ class Autoencoder(pl.LightningModule):
         ### Sub-Network def
         if self.input_type == InputType.VOXELS:
             self.encoder = VoxelEncoderBN(
-                dim=3, c_dim=emb_dims, last_feature_transform="add_noise"
+                dim=3, c_dim=emb_dims, last_feature_transform=None
             )
         elif self.input_type == InputType.POINTCLOUD:
             self.encoder = PointNet(
-                pc_dims=1024, c_dim=emb_dims, last_feature_transform="add_noise"
+                pc_dims=1024, c_dim=emb_dims, last_feature_transform=None
             )
 
         if self.output_type == OutputType.IMPLICIT:

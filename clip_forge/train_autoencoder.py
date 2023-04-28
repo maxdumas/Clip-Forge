@@ -129,8 +129,6 @@ class AutoEncoderCLI(LightningCLI):
         parser.link_arguments("model.test_batch_size", "data.test_batch_size")
         parser.link_arguments("model.num_points", "data.num_points")
 
-        # parser.add_argument("--ckpt_path", type=str, default=None)
-
     def search_for_checkpoints(self, wandb_logger: WandbLogger):
         ckpt_path = self.config_init[self.subcommand].ckpt_path
         sm_ckpt_path = os.path.join("/opt/ml/checkpoints", "last.ckpt")
