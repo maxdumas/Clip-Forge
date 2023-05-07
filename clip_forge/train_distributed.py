@@ -40,7 +40,7 @@ class DistributedTraining(Application):
 
         # This job name is used as prefix to the sagemaker training job. Makes it easy
         # for your look for your training job in SageMaker Training job console.
-        job_name = "sm-full-1"  # TODO: Generate using same code as W&B
+        job_name = "sm-vae-1"  # TODO: Generate using same code as W&B
         print("Job name: ", job_name)
 
         # This is the location that SageMaker will automatically store (and load)

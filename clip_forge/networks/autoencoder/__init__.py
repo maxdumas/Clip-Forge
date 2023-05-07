@@ -1,4 +1,3 @@
-
 from typing import Optional
 
 import numpy as np
@@ -11,6 +10,7 @@ from torch import Tensor
 from ...utils.helper import InputType, OutputType
 from ...utils.visualization import make_3d_grid
 from .implicit import Occ_Simple_Decoder, VoxelEncoderBN
+from .implicit_vae import VoxelVariationalAutoencoder
 from .pointcloud import Foldingnet_decoder, PointNet
 
 
@@ -26,6 +26,7 @@ def dist_chamfer(a: Tensor, b: Tensor) -> tuple[Tensor, Tensor]:
     ry = yy[:, diag_ind, diag_ind].unsqueeze(1).expand_as(yy)
     P = rx.transpose(2, 1) + ry - 2 * zz
     return P.min(1)[0], P.min(2)[0]
+
 
 def compute_iou(occ1: Tensor, occ2: Tensor):
     """Computes the Intersection over Union (IoU) value for two sets of
@@ -56,6 +57,7 @@ def compute_iou(occ1: Tensor, occ2: Tensor):
 
     return iou
 
+
 class Autoencoder(pl.LightningModule):
     encoder: nn.Module
     decoder: nn.Module
@@ -82,38 +84,16 @@ class Autoencoder(pl.LightningModule):
         self.output_type = output_type
         self.threshold = threshold
 
-        ### Sub-Network def
-        if self.input_type == InputType.VOXELS:
-            self.encoder = VoxelEncoderBN(
-                dim=3, c_dim=emb_dims, last_feature_transform=None
-            )
-        elif self.input_type == InputType.POINTCLOUD:
-            self.encoder = PointNet(
-                pc_dims=1024, c_dim=emb_dims, last_feature_transform=None
-            )
+        assert self.input_type == InputType.VOXELS
+        assert self.output_type == OutputType.IMPLICIT
 
-        if self.output_type == OutputType.IMPLICIT:
-            self.decoder = Occ_Simple_Decoder(z_dim=emb_dims)
-        elif self.output_type == OutputType.POINTCLOUD:
-            self.decoder = Foldingnet_decoder(num_points=num_points, z_dim=emb_dims)
-
-    def decoding(self, shape_embedding, points=None):
-        if self.output_type == OutputType.IMPLICIT:
-            return self.decoder(points, shape_embedding)
-        elif self.output_type == OutputType.POINTCLOUD:
-            return self.decoder(shape_embedding)
+        self.net = VoxelVariationalAutoencoder(self.emb_dims)
 
     def reconstruction_loss(self, pred: Tensor, gt: Tensor) -> Tensor:
-        if self.output_type == OutputType.IMPLICIT:
-            return F.mse_loss(pred.squeeze(-1), gt)
-        elif self.output_type == OutputType.POINTCLOUD:
-            dl, dr = dist_chamfer(gt, pred)
-            return (dl.mean(dim=1) + dr.mean(dim=1)).mean()
+        return F.mse_loss(pred.squeeze(-1), gt)
 
-    def forward(self, data_input, query_points=None) -> tuple[Tensor, Tensor]:
-        shape_embs = self.encoder(data_input)
-        pred = self.decoding(shape_embs, points=query_points)
-        return pred, shape_embs
+    def forward(self, data_input, query_points=None) -> Tensor:
+        return self.net.forward(data_input, query_points)
 
     def configure_optimizers(self):
         # TODO: How do we parameterize this using LightningCLI?
@@ -121,16 +101,10 @@ class Autoencoder(pl.LightningModule):
 
     def extract_input(self, data: dict) -> Tensor:
         # Load appropriate input data from the training set
-        if self.input_type == InputType.VOXELS:
-            return data["voxels"]
-        elif self.input_type == InputType.POINTCLOUD:
-            return data["pc_org"].transpose(-1, 1)
+        return data["voxels"]
 
-    def extract_ground_truth(self, data: dict) -> tuple[Tensor, Optional[Tensor]]:
-        if self.output_type ==  OutputType.IMPLICIT:
-            return data["points_occ"], data["points"]
-        elif self.output_type == OutputType.POINTCLOUD:
-            return data["pc_org"], None
+    def extract_ground_truth(self, data: dict) -> tuple[Tensor, Tensor]:
+        return data["points_occ"], data["points"]
 
     def create_sampling_grid(self, data_input: Tensor) -> Tensor:
         points_voxels = make_3d_grid(
@@ -149,7 +123,7 @@ class Autoencoder(pl.LightningModule):
         gt, query_points = self.extract_ground_truth(data)
 
         # Run prediction
-        pred, _ = self.forward(data_input, query_points)
+        pred = self.forward(data_input, query_points)
 
         # Compute reconstruction loss
         loss = self.reconstruction_loss(pred, gt)
@@ -162,7 +136,7 @@ class Autoencoder(pl.LightningModule):
         data_input = self.extract_input(data)
         gt, query_points = self.extract_ground_truth(data)
 
-        pred, _ = self.forward(data_input, query_points)
+        pred = self.forward(data_input, query_points)
 
         loss = self.reconstruction_loss(pred, gt)
 
@@ -173,7 +147,7 @@ class Autoencoder(pl.LightningModule):
             query_points = self.create_sampling_grid(data_input)
 
             # Run prediction
-            pred, _ = self.forward(data_input, query_points)
+            pred = self.forward(data_input, query_points)
 
             voxels_occ_np = data["voxels"] >= 0.5
             occ_hat_np = pred >= self.threshold
@@ -187,7 +161,7 @@ class Autoencoder(pl.LightningModule):
         data_input = self.extract_input(data)
         gt, query_points = self.extract_ground_truth(data)
 
-        pred, _ = self.forward(data_input, query_points)
+        pred = self.forward(data_input, query_points)
 
         loss = self.reconstruction_loss(pred, gt)
 
@@ -198,7 +172,7 @@ class Autoencoder(pl.LightningModule):
             query_points = self.create_sampling_grid(data_input)
 
             # Run prediction
-            pred, _ = self.forward(data_input, query_points)
+            pred = self.forward(data_input, query_points)
 
             voxels_occ_np = data["voxels"] >= 0.5
             occ_hat_np = pred >= self.threshold

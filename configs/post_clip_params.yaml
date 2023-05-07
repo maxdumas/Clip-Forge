@@ -3,7 +3,7 @@
 
 dataset_name: BuildingNet
 
-autoencoder_checkpoint: maxdumas/clip_forge_autoencoder/model-f6vppe9g:v8
+autoencoder_checkpoint: maxdumas/clip_forge_autoencoder/model-g87d684q:v23
 
 num_views: 1
 text_query: "\"an office building\" \"a church\" \"a cottage\""

@@ -85,7 +85,7 @@ class LogPredictionSamplesCallback(Callback):
         # Run prediction (being sure not to affect training)
         with torch.no_grad():
             pl_module.eval()
-            outputs, _ = pl_module.forward(data_input, query_points)
+            outputs = pl_module.forward(data_input, query_points)
             pl_module.train()
 
         trainer.logger.experiment.log(
@@ -176,7 +176,7 @@ def main(args: ArgsType = None):
         # TODO: Implement a better check that we are in SageMaker
         "/opt/ml/checkpoints" if os.path.exists("/opt/ml") else None,
         monitor="loss/val/iou",
-        mode="min",
+        mode="max",
         every_n_epochs=10,
     )
     # early_stop_callback = EarlyStopping(

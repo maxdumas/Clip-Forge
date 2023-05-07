@@ -74,7 +74,7 @@ class LogPredictionSamplesCallback(Callback):
                 num_figs, noise=noise, cond_inputs=text_features.repeat(num_figs, 1)
             )
 
-            out = self.autoencoder.decoding(decoder_embs, query_points)
+            out = self.autoencoder.net.decoder(query_points, decoder_embs)
 
             if self.output_type == "Implicit":
                 voxels_out = (

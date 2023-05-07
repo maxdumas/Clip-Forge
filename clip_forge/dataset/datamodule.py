@@ -202,7 +202,7 @@ class BuildingNetEmbeddingDataModule(BuildingNetDataModule):
                             .transpose(-1, 1)
                         )
 
-                    shape_emb = self.autoencoder.encoder(data_input)
+                    shape_emb = self.autoencoder.net.reparameterize(*self.autoencoder.net.encoder(data_input))
 
                     image_features = self.clip_model.encode_image(image)
                     image_features = image_features / image_features.norm(
