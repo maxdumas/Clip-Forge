@@ -258,14 +258,29 @@ shared embedding space. I am interested in trying out other competing models for
 generating joint text-image embeddings in the future.
 
 ## Results
-* Training loss
-* Validation loss
-* Diagnosis
-    * Latent Flows
-    * CLIP embedding performance
 
 ![Training diagram](docs/training_dag.png)
 ![Inference diagram](docs/inference_dag.png)
+
+![Autencoder Results Report](docs/results_autoencoder.png)
+
+![End-to-end Results](docs/results_e2e.png)
+
+The steps taken for training and inference are detailed above. Also pictured
+above are sample results from the autoencoder and sample results from sampling
+the end-to-end network using text.
+
+A more detailed treatment of Autoencoder performance results can be found in the
+living document [here](https://api.wandb.ai/links/maxdumas/3qz6i568). Suffice to
+say, end-to-end is currently inadequate for this approach to be useful for
+architectural visualization. While the autoencoder demonstrates some ability to
+expresss signficant architectural features of the buildings, when attempting to
+sample into the embedding space using text, outputs are largely noise.
+
+Further work is needed to diagnose the issue here. Most effort was spent on
+improving the autoencoder performance, while relatively little effort was spent
+on diagnosing the performance of the CLIP embeddings or of the Latent Flows
+network.
 
 ## Next Steps
 
@@ -290,7 +305,7 @@ usage in CAD software, others may be constructed by photogrammetry of real
 buildings and as such have extremely noisy meshes. Figuring out how to properly
 normalize these meshes will be key to using them in this project.
 
-* Neural rendering techniques, fantasia, AutoSDF. Fine-tuning emerged foundation models.
+* Neural rendering techniques, Fantasia, AutoSDF. Fine-tuning emerged foundation models.
 
 * Use CLIP alternatives
 
