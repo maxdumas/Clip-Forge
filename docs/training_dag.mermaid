@@ -1,0 +1,20 @@
+---
+title: Training Structure
+---
+
+flowchart LR
+meshes --> gt_voxels
+meshes --> images
+
+subgraph ac [autoencoder training: reconstruct input voxels using low-dim embedding]
+    gt_voxels --> encoder --> autoencoder_embedding --> decoder
+    decoder --> rc_voxels
+end
+
+subgraph lf [latent flows training: map autoencoder embedding to clip embedding]
+images --> clip --> clip_embedding
+clip_embedding --> latent_flows
+encoder .-> latent_flows
+decoder .-> latent_flows
+latent_flows --> lf_voxels
+end

@@ -1,0 +1,5 @@
+flowchart 
+data[Training data] --> pytorch_lightning
+pytorch_model[PyTorch\nmodel code] --> pytorch_lightning
+pytorch_lightning[PyTorch Lightning] -- GPU instances\nfor training --> sagemaker[AWS Sagemaker\nManaged Training]
+pytorch_lightning -- logs, metrics,\nmodel weights, charts--> wandb[Weights & Biases]

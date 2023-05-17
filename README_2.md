@@ -83,11 +83,6 @@ videos, and text.
 [TODO]
 
 ## Dataset Creation
-Considered the following datasets:
-* Berlin 3D https://www.businesslocationcenter.de/en/economic-atlas/download-portal/
-* Montreal 3D https://donnees.montreal.ca/dataset/maquette-numerique-plateau-mont-royal-batiments-lod2-avec-textures
-* NYC 3D https://github.com/CityOfNewYork/nyc-geo-metadata/blob/master/Metadata/Metadata_3DBuildingModel.md
-In the end, settled on BuildingNet: https://buildingnet.org/
 
 I considered several different possible datasets when starting this project. My
 first thought was to use one or more of the existing 3D building model datasets
@@ -119,7 +114,11 @@ or similar tools.
 
 These 2,000 3D models require extensive normalization and are derived into a
 series of other artifacts. The code for this is in [the sibling
-repo](https://github.com/maxdumas/text2building_data) for this project.
+repo](https://github.com/maxdumas/text2building_data) for this project. That
+repo contains instructions for running and obtaining the data used in this
+project.
+
+![A dependency diagram of the data pipeline this repository.](docs/dvc_dag.png)
 
 Normalization steps include:
 * Turning each mesh into a watertight mesh using [ManifoldPlus](https://github.com/hjwdzh/ManifoldPlus).
@@ -143,6 +142,10 @@ Artifact generation steps included:
 * PyTorch Lightning
 * SageMaker Spot Training
 * Weights & Biases
+
+![A system diagram of high-level infrastructure components.](docs/infra_dag.png)
+
+Significant effort was spent on adapting the code inherited from the 
 
 ## Model Architecture
 
@@ -183,6 +186,14 @@ shared embedding space. I am interested in trying out other competing models for
 generating joint text-image embeddings in the future.
 
 ## Results
+* Training loss
+* Validation loss
+* Diagnosis
+    * Latent Flows
+    * CLIP embedding performance
+
+![Training diagram](docs/training_dag.png)
+![Inference diagram](docs/inference_dag.png)
 
 ## Next Steps
 
