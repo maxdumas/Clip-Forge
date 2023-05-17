@@ -3,8 +3,9 @@
 ## Introduction
 
 This repository contains the code for Text2Building, an attempt by myself to
-adapt the code for the paper "CLIP-Forge: Towards Zero Shot Text-to-Shape
-Generation" to the domain of 3D building models.
+adapt the code for the paper ["CLIP-Forge: Towards Zero Shot Text-to-Shape
+Generation"](https://arxiv.org/pdf/2110.02624.pdf) to the domain of 3D building
+models.
 
 The goal of this project is to explore using cutting-edge breakthroughs in
 generative artficial intellience to democratize the building design process. 
@@ -80,7 +81,46 @@ being done to enable the creation of 3D geometry with a variety of different
 input modalities, such as 2D images, incomplete 3D geometry, point clouds,
 videos, and text.
 
-[TODO]
+I explored recent advancements and challenges in text-to-shape generation,
+focusing on zero-shot learning and multimodal approaches. The main paper used in
+this review is "CLIP-Forge: Towards Zero-Shot Text-to-Shape Generation," which
+proposes a simple yet effective method for zero-shot text-to-shape generation
+using an unlabelled shape dataset and a pre-trained image-text network such as
+CLIP. This work demonstrates promising zero-shot generalization and provides
+extensive comparative evaluations.
+
+Another significant paper is "AutoSDF: Shape Priors for 3D Completion,
+Reconstruction, and Generation," which proposes an autoregressive prior for 3D
+shapes to solve multimodal 3D tasks such as shape completion, reconstruction,
+and generation. The paper presents a non-sequential autoregressive distribution
+over a discretized, low-dimensional, symbolic grid-like latent representation of
+3D shapes, which allows for the representation of distributions over 3D shapes
+conditioned on information from an arbitrary set of spatially anchored query
+locations. Although the approach is more complex, it shows potential in
+outperforming specialized state-of-the-art methods trained for individual tasks.
+
+"SDFusion: Multimodal 3D Shape Completion, Reconstruction, and Generation"
+presents a novel framework built to simplify 3D asset generation for amateur
+users by supporting a variety of input modalities, including images, text, and
+partially observed shapes. The approach is based on an encoder-decoder,
+compressing 3D shapes into a compact latent representation upon which a
+diffusion model is learned. The model supports various tasks, outperforming
+prior works in shape completion, image-based 3D reconstruction, and text-to-3D,
+making it a promising swiss-army-knife tool for shape generation.
+
+Lastly, "Graph Neural Networks in Building Life-Cycle: A Review" examines the
+application of graph neural networks (GNNs) in the building lifecycle. The paper
+identifies ten application domains from the planning stage to the operation
+stage and discusses the challenges and opportunities of GNNs adoption in
+architecture, engineering, and construction (AEC). Although the adoption of GNNs
+is still in its infancy, the paper highlights the potential for future research.
+
+Additional papers worth considering include "Vitruvio: 3D Building Meshes via
+Single-Perspective Sketches," "Zero-Shot Text-Guided Object Generation with
+Dream Fields," and "GAUDI: A Neural Architect for Immersive 3D Scene
+Generation." These papers further explore text-to-shape generation, zero-shot
+learning, and multimodal approaches in the context of 3D building meshes, object
+generation, and immersive 3D scene generation, respectively.
 
 ## Dataset Creation
 
@@ -145,7 +185,39 @@ Artifact generation steps included:
 
 ![A system diagram of high-level infrastructure components.](docs/infra_dag.png)
 
-Significant effort was spent on adapting the code inherited from the 
+Significant effort was spent on adapting the code inherited from the Clip-Forge
+project to use current training infrastructure best practices. The main efforts
+in this space were the following:
+
+* Adopting [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) to
+  manage training code. PyTorch Lightning is a Python library designed to
+  dramatically reduce the amount of boilerplate code required for most model
+  training. It contains built-in functionality for implementing training and
+  inference loops and for managing loading training data in batches and in
+  different splits. It builds upon this basic boilerplate to enable easy
+  generation of CLIs from model parameters, single-switch activation of model
+  debugging and training techniques like single-batch overfitting and
+  mixed-precision training, among many other features. I chose to adopt PyTorch
+  as a way to distill away the non-original parts of the codebase and focus
+  purely on the model architecture.
+* Enabling the usage of [AWS SageMaker Managed
+  Training](https://docs.aws.amazon.com/sagemaker/latest/dg/train-model.html).
+  In particular, some effort was spent to enable the usage of [Spot
+  Training](https://docs.aws.amazon.com/sagemaker/latest/dg/model-managed-spot-training.html),
+  which allows for up to 40% cost savings if your training is adapted to be
+  interruptable and resumable. Managed training allows for horizontally scalable
+  training, which allowed me to run many experiments concurrently, and to choose
+  the best instances for the job so as to minimize spent time waiting for
+  training to complete. It also made training a largely push-button process,
+  reducing time spent managing instances, babying computers, and worrying about
+  crashed or failed training runs.
+* Adopting [Weights & Biases](wandb.ai) for experiment management. W&B is a
+  cloud platform for tracking all information about ML experiments. By
+  outputting all of my metrics and model artifacts to a single location, I was
+  able to effectively track model performance in many dimensions across many
+  experiments and to be confident that I could always roll back and refer to
+  model weights that would correspond to my best performing models. I would also
+  know what git commit and hyperparameters produced that model.
 
 ## Model Architecture
 
