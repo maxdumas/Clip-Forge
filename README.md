@@ -179,9 +179,6 @@ Artifact generation steps included:
   contained by the voxel volume itself.
 
 ## Training Infrastructure 
-* PyTorch Lightning
-* SageMaker Spot Training
-* Weights & Biases
 
 ![A system diagram of high-level infrastructure components.](docs/infra_dag.png)
 
@@ -285,12 +282,41 @@ network.
 ## Next Steps
 
 ### Additional Data
-* RealCity3D
-LOD-2 3D models of every building in NYC and Zurich, made easily usable. In particular, the Zurich buildings seem interesting.
 
-* Blackshark.ai
-* Cities Skylines dataset
-* Objaverse
+A key limitation is data. With a larger, cleaner dataset of 3D building models,
+we can use more powerful models and still generalize.
+
+#### RealCity3D
+LOD-2 3D models of every building in NYC and Zurich, made easily usable. In
+particular, the Zurich buildings seem interesting.
+#### Blackshark.ai
+#### Cities: Skylines dataset
+
+Cities: Skylines is a citybuilding videogame in the lineage of SimCity. It has
+been out for over 8 years and has a vibrant modding community, which has
+produced thousands of 3D models of buildings for use in the game.
+
+These 3D models are relatively consistent in quality and visual style. They have
+a relatively high level of detail, a relatively low polygon count, and
+relatively good model topologies, all being intended for use in the same
+videogame.
+
+These 3D models are not particularly easy to access. Steam, the primary
+distributor for the game and its mods, does not allow users to batch download
+mods. A (questionably legal) mirror of many of these mods exists at
+[smods.ru](http://smods.ru), which allows direct download. We could scrape this
+website and download the building mods. This would give us CRP files, which
+would typically contain a Unity Mesh in there.
+
+We could then  use a tool like [http://unera.se/crper/](http://unera.se/crper/),
+which  is able to parse CRP files. Inspect its source code and view `crper.js`.
+More info is available here:
+[https://cslmodding.info/dump/](https://cslmodding.info/dump/)
+
+Info about exporting unity meshes to FBX/OBJ:
+[https://www.noveltech.dev/export-mesh-unity/](https://www.noveltech.dev/export-mesh-unity/)
+
+#### Objaverse
 
 Recently released by the Allen Institute for AI, the [Objaverse
 dataset](https://objaverse.allenai.org/) consists of over 800,000 annotated 3D
@@ -307,7 +333,7 @@ normalize these meshes will be key to using them in this project.
 
 * Neural rendering techniques, Fantasia, AutoSDF. Fine-tuning emerged foundation models.
 
-* Use CLIP alternatives
+### Use CLIP alternatives
 
 [CLIP](https://openai.com/research/clip) is a model provided by OpenAI and is
 considered frozen for the purposes of this experiment. Its use, as can be
@@ -315,4 +341,11 @@ inferred from the above, is to join the text and 2D image modalities into a sing
 shared embedding space. I am interested in trying out other competing models for
 generating joint text-image embeddings in the future.
 
-* Dive deeper into Latent Flows network architecure
+Of particular interest are [`CoCa`](https://github.com/lucidrains/CoCa-pytorch)
+and [`open_clip`](https://github.com/mlfoundations/open_clip).
+
+### Dive deeper into Latent Flows network architecure
+
+As mentioned above in the performance considerations section, a possible reason
+for poor end-to-end performance lies in the Latent Flows model. More effort
+would be needed to explore potential failure modes here.
